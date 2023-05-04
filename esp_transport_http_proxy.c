@@ -5,7 +5,6 @@
 #include "esp_transport_internal.h"
 
 static const char *TAG = "trans_http_pxy";
-static const size_t MAX_HOST_LEN = 512;
 static const size_t MAX_HEADER_LEN = 1024;
 
 typedef struct transport_http_proxy_t {
