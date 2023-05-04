@@ -3,6 +3,7 @@
 #include <string.h>
 #include <lwip/sockets.h>
 #include "esp_transport_http_proxy.h"
+#include "esp_transport_internal.h"
 
 static const char *TAG = "trans_http_pxy";
 static const size_t MAX_HOST_LEN = 512;
@@ -218,6 +219,17 @@ esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t pare
     }
 
     esp_transport_handle_t transport = esp_transport_init();
+
+    // I know this is shit, but I have no choice...
+    // Upstream tcp-transport doesn't expose the foundation pointer, so I have to have some dirty hacks here...
+    // This has to be here, otherwise transport_ws won't work with this HTTP proxy handle
+    if (parent_handle->foundation == NULL) {
+        transport->foundation = parent_handle->foundation;
+    } else {
+        transport->foundation = esp_transport_init_foundation_transport(); // Might be just a placeholder
+    }
+
+
     if (transport == NULL) {
         ESP_LOGE(TAG, "Failed to create transport handle");
         return NULL;
