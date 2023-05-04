@@ -58,6 +58,7 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
         return -2;
     }
 
+    ESP_LOGI(TAG, "Connecting to proxy host: %s at port %u", handle->proxy_host, handle->proxy_port);
     int connect_ret = esp_transport_connect(handle->parent, handle->proxy_host, handle->proxy_port, timeout_ms);
     if (connect_ret < 0) {
         ESP_LOGE(TAG, "Parent transport method connect fail: %d", connect_ret);
@@ -245,7 +246,7 @@ esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t pare
     proxy_handle->parent = parent_handle;
     proxy_handle->proxy_port = config->proxy_port;
     proxy_handle->alloc_cap = config->alloc_cap_flag;
-    proxy_handle->proxy_host = heap_caps_calloc(strnlen(config->proxy_host, MAX_HOST_LEN), sizeof(char), proxy_handle->alloc_cap);
+    proxy_handle->proxy_host = heap_caps_calloc(strnlen(config->proxy_host, MAX_HOST_LEN) + 1, sizeof(char), proxy_handle->alloc_cap);
     if (proxy_handle->proxy_host == NULL) {
         ESP_LOGE(TAG, "Failed to allocate proxy host string");
         esp_transport_destroy(transport);
@@ -255,7 +256,7 @@ esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t pare
     strncpy(proxy_handle->proxy_host, config->proxy_host, MAX_HOST_LEN);
 
     if (config->user_agent != NULL) {
-        proxy_handle->user_agent = heap_caps_calloc(strnlen(config->user_agent, MAX_HOST_LEN), sizeof(char), proxy_handle->alloc_cap);
+        proxy_handle->user_agent = heap_caps_calloc(strnlen(config->user_agent, MAX_HOST_LEN) + 1, sizeof(char), proxy_handle->alloc_cap);
         if (proxy_handle->user_agent == NULL) {
             ESP_LOGE(TAG, "Failed to allocate proxy user-agent string");
             esp_transport_destroy(transport);
