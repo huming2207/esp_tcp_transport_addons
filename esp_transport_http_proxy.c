@@ -1,5 +1,4 @@
 #include <esp_log.h>
-#include <esp_heap_caps.h>
 #include <string.h>
 #include <lwip/sockets.h>
 #include "esp_transport_http_proxy.h"
@@ -52,7 +51,7 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
         return -1;
     }
 
-    char *connect_header = heap_caps_calloc(MAX_HEADER_LEN, sizeof(char), handle->alloc_cap);
+    char *connect_header = calloc(MAX_HEADER_LEN, sizeof(char));
     if (connect_header == NULL) {
         ESP_LOGE(TAG, "Failed to allocate header buffer");
         return -2;
@@ -200,7 +199,9 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
         return ESP_OK;
     }
 
+
     transport_http_proxy_t *handle = esp_transport_get_context_data(transport);
+    ESP_LOGI(TAG, "Handle %p destroyed!", handle);
     if (handle == NULL) {
         return ESP_ERR_INVALID_ARG; // Might have been freed before??
     }
@@ -236,7 +237,7 @@ esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t pare
         return NULL;
     }
 
-    transport_http_proxy_t *proxy_handle = heap_caps_calloc(1, sizeof(transport_http_proxy_t), config->alloc_cap_flag);
+    transport_http_proxy_t *proxy_handle = calloc(1, sizeof(transport_http_proxy_t));
     if (proxy_handle == NULL) {
         ESP_LOGE(TAG, "Failed to allocate proxy handle");
         esp_transport_destroy(transport);
@@ -246,24 +247,20 @@ esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t pare
     proxy_handle->parent = parent_handle;
     proxy_handle->proxy_port = config->proxy_port;
     proxy_handle->alloc_cap = config->alloc_cap_flag;
-    proxy_handle->proxy_host = heap_caps_calloc(strnlen(config->proxy_host, MAX_HOST_LEN) + 1, sizeof(char), proxy_handle->alloc_cap);
+    proxy_handle->proxy_host = strdup(config->proxy_host);
     if (proxy_handle->proxy_host == NULL) {
         ESP_LOGE(TAG, "Failed to allocate proxy host string");
         esp_transport_destroy(transport);
         return NULL;
     }
 
-    strncpy(proxy_handle->proxy_host, config->proxy_host, MAX_HOST_LEN);
-
     if (config->user_agent != NULL) {
-        proxy_handle->user_agent = heap_caps_calloc(strnlen(config->user_agent, MAX_HOST_LEN) + 1, sizeof(char), proxy_handle->alloc_cap);
+        proxy_handle->user_agent = strdup(config->user_agent);
         if (proxy_handle->user_agent == NULL) {
             ESP_LOGE(TAG, "Failed to allocate proxy user-agent string");
             esp_transport_destroy(transport);
             return NULL;
         }
-
-        strncpy(proxy_handle->user_agent, config->user_agent, MAX_HOST_LEN);
     }
 
     esp_transport_set_func(transport, http_proxy_connect, http_proxy_read, http_proxy_write, http_proxy_close, http_proxy_poll_read, http_proxy_poll_write, http_proxy_destroy);
