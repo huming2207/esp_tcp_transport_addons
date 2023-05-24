@@ -146,6 +146,22 @@ void esp_transport_capture_errno(esp_transport_handle_t t, int sock_errno);
  */
 void esp_transport_set_errors(esp_transport_handle_t t, const esp_tls_error_handle_t error_handle);
 
+typedef enum {
+    TRANS_SSL_INIT = 0,
+    TRANS_SSL_CONNECTING,
+} transport_ssl_conn_state_t;
+
+/**
+ *  mbedtls specific transport data
+ */
+typedef struct transport_esp_tls {
+    esp_tls_t                *tls;
+    esp_tls_cfg_t            cfg;
+    bool                     ssl_initialized;
+    transport_ssl_conn_state_t conn_state;
+    int                      sockfd;
+} transport_esp_tls_t;
+
 #ifdef __cplusplus
 }
 #endif

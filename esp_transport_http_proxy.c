@@ -1,18 +1,24 @@
 #include <esp_log.h>
 #include <string.h>
 #include <lwip/sockets.h>
+#include <esp_transport_tcp.h>
+#include <esp_transport_ssl.h>
 #include "esp_transport_http_proxy.h"
 #include "esp_transport_internal.h"
 
 static const char *TAG = "trans_http_pxy";
 static const size_t MAX_HEADER_LEN = 1024;
 
+#define HTTP_PROXY_KEEP_ALIVE_IDLE       (5)
+#define HTTP_PROXY_KEEP_ALIVE_INTERVAL   (5)
+#define HTTP_PROXY_KEEP_ALIVE_COUNT      (3)
+
 typedef struct transport_http_proxy_t {
     uint16_t proxy_port;
-    uint32_t alloc_cap;
     esp_transport_handle_t parent;
     char *proxy_host;
     char *user_agent;
+    esp_transport_keep_alive_t keep_alive_cfg;
 } transport_http_proxy_t;
 
 static int get_http_status_code(const char *buffer)
@@ -67,8 +73,8 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
     ESP_LOGI(TAG, "Connecting to host via proxy: %s:%d", host, port);
     snprintf(connect_header, MAX_HEADER_LEN, "CONNECT %s:%u HTTP/1.1\r\n"
                                              "Host: %s\r\n"
-                                             "Proxy-Connection: keep-alive\r\n"
                                              "User-Agent: %s\r\n"
+                                             "Proxy-Connection: Keep-Alive\r\n"
                                              "\r\n",
                                              host, port, host, handle->user_agent == NULL ? "ESP-IDF/1.0" : handle->user_agent);
 
@@ -213,44 +219,151 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
     return ESP_OK;
 }
 
-esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t parent_handle, const esp_transport_http_proxy_config_t *config)
+static esp_err_t http_proxy_init_with_parent(esp_transport_handle_t transport, const esp_transport_http_proxy_config_t *config)
 {
-    if (parent_handle == NULL || config == NULL) {
-        return NULL;
+    if (config == NULL || transport == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
-    esp_transport_handle_t transport = esp_transport_init();
+    if (config->parent_handle == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     // I know this is shit, but I have no choice...
     // Upstream tcp-transport doesn't expose the foundation pointer, so I have to have some dirty hacks here...
     // This has to be here, otherwise transport_ws won't work with this HTTP proxy handle
-    if (parent_handle->foundation == NULL) {
-        transport->foundation = parent_handle->foundation;
+    if (config->parent_handle->foundation == NULL) {
+        transport->foundation = config->parent_handle->foundation;
     } else {
         transport->foundation = esp_transport_init_foundation_transport(); // Might be just a placeholder
     }
 
+    transport_http_proxy_t *proxy_handle = (transport_http_proxy_t *)esp_transport_get_context_data(transport);
+    proxy_handle->parent = config->parent_handle;
 
+    return ESP_OK;
+}
+
+static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, const esp_transport_http_proxy_config_t *config)
+{
+    if (config == NULL || transport == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (config->parent_handle != NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    transport_http_proxy_t *proxy_handle = (transport_http_proxy_t *)esp_transport_get_context_data(transport);
+    if (!config->is_https_proxy) {
+        proxy_handle->parent = esp_transport_tcp_init();
+        if (proxy_handle->parent == NULL) {
+            ESP_LOGE(TAG, "Failed to create plain TCP context");
+            return ESP_ERR_NO_MEM;
+        }
+
+        esp_err_t ret = esp_transport_set_default_port(proxy_handle->parent, config->proxy_port);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set TCP port: 0x%x", ret);
+            return ret;
+        }
+
+        esp_transport_tcp_set_interface_name(proxy_handle->parent, config->if_name);
+    } else {
+        proxy_handle->parent = esp_transport_ssl_init();
+        if (proxy_handle->parent == NULL) {
+            ESP_LOGE(TAG, "Failed to create SSL context");
+            return ESP_ERR_NO_MEM;
+        }
+
+        esp_err_t ret = esp_transport_set_default_port(proxy_handle->parent, config->proxy_port);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set SSL port: 0x%x", ret);
+            return ret;
+        }
+
+        if (config->use_global_ca_store == true) {
+            esp_transport_ssl_enable_global_ca_store(proxy_handle->parent);
+        } else if (config->cert) {
+            if (!config->cert_len) {
+                esp_transport_ssl_set_cert_data(proxy_handle->parent, config->cert, (int)strlen(config->cert));
+            } else {
+                esp_transport_ssl_set_cert_data_der(proxy_handle->parent, config->cert, (int)config->cert_len);
+            }
+        }
+
+        if (config->client_cert) {
+            if (!config->client_cert_len) {
+                esp_transport_ssl_set_client_cert_data(proxy_handle->parent, config->client_cert, (int)strlen(config->client_cert));
+            } else {
+                esp_transport_ssl_set_client_cert_data_der(proxy_handle->parent, config->client_cert, (int)config->client_cert_len);
+            }
+        }
+
+        if (config->client_key) {
+            if (!config->client_key_len) {
+                esp_transport_ssl_set_client_key_data(proxy_handle->parent, config->client_key, (int)strlen(config->client_key));
+            } else {
+                esp_transport_ssl_set_client_key_data_der(proxy_handle->parent, config->client_key, (int)config->client_key_len);
+            }
+        }
+
+        if (config->crt_bundle_attach) {
+#ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+            esp_transport_ssl_crt_bundle_attach(proxy_handle->parent, config->crt_bundle_attach);
+#else //CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
+            ESP_LOGE(TAG, "crt_bundle_attach configured but not enabled in menuconfig: Please enable MBEDTLS_CERTIFICATE_BUNDLE option");
+#endif
+        }
+
+        if (config->skip_cert_common_name_check) {
+            esp_transport_ssl_skip_common_name_check(proxy_handle->parent);
+        }
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle, const esp_transport_http_proxy_config_t *config)
+{
+    if (config == NULL || new_proxy_handle == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_transport_handle_t transport = esp_transport_init();
     if (transport == NULL) {
         ESP_LOGE(TAG, "Failed to create transport handle");
-        return NULL;
+        return ESP_FAIL;
     }
 
     transport_http_proxy_t *proxy_handle = calloc(1, sizeof(transport_http_proxy_t));
     if (proxy_handle == NULL) {
         ESP_LOGE(TAG, "Failed to allocate proxy handle");
         esp_transport_destroy(transport);
-        return NULL;
+        return ESP_ERR_NO_MEM;
+    } else {
+        esp_transport_set_context_data(transport, proxy_handle);
     }
 
-    proxy_handle->parent = parent_handle;
+    if (config->parent_handle != NULL) {
+        esp_err_t ret = http_proxy_init_with_parent(transport, config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to prepare parent handle: 0x%x", ret);
+            return ret;
+        }
+    } else {
+        esp_err_t ret = http_proxy_init_standalone(transport, config);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+    }
+
     proxy_handle->proxy_port = config->proxy_port;
-    proxy_handle->alloc_cap = config->alloc_cap_flag;
     proxy_handle->proxy_host = strdup(config->proxy_host);
     if (proxy_handle->proxy_host == NULL) {
         ESP_LOGE(TAG, "Failed to allocate proxy host string");
         esp_transport_destroy(transport);
-        return NULL;
+        return ESP_ERR_NO_MEM;
     }
 
     if (config->user_agent != NULL) {
@@ -258,12 +371,12 @@ esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t pare
         if (proxy_handle->user_agent == NULL) {
             ESP_LOGE(TAG, "Failed to allocate proxy user-agent string");
             esp_transport_destroy(transport);
-            return NULL;
+            return ESP_ERR_NO_MEM;
         }
     }
 
     esp_transport_set_func(transport, http_proxy_connect, http_proxy_read, http_proxy_write, http_proxy_close, http_proxy_poll_read, http_proxy_poll_write, http_proxy_destroy);
-    esp_transport_set_context_data(transport, proxy_handle);
 
-    return transport;
+    *new_proxy_handle = transport;
+    return ESP_OK;
 }

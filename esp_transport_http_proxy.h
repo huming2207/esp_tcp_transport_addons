@@ -7,9 +7,23 @@
  */
 typedef struct esp_transport_http_proxy_config_t {
     uint16_t proxy_port;
-    uint32_t alloc_cap_flag;
     const char *proxy_host;
     const char *user_agent;
+    bool is_https_proxy;
+    esp_transport_handle_t parent_handle;
+    struct ifreq *if_name;
+    uint32_t keep_alive_idle;            /*!< Keep-alive idle time. Default is 5 (second) */
+    uint32_t keep_alive_interval;        /*!< Keep-alive interval time. Default is 5 (second) */
+    uint32_t keep_alive_count;           /*!< Keep-alive packet retry send count. Default is 3 counts */
+    bool use_global_ca_store;
+    const char *cert;
+    size_t cert_len;
+    const char *client_cert;
+    size_t client_cert_len;
+    const char *client_key;
+    size_t client_key_len;
+    bool skip_cert_common_name_check;
+    esp_err_t (*crt_bundle_attach)(void *conf);
 } esp_transport_http_proxy_config_t;
 
-esp_transport_handle_t esp_transport_http_proxy_init(esp_transport_handle_t parent_handle, const esp_transport_http_proxy_config_t *config);
+esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle, const esp_transport_http_proxy_config_t *config);
