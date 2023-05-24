@@ -12,9 +12,10 @@ typedef struct esp_transport_http_proxy_config_t {
     bool is_https_proxy;
     esp_transport_handle_t parent_handle;
     struct ifreq *if_name;
-    uint32_t keep_alive_idle;            /*!< Keep-alive idle time. Default is 5 (second) */
-    uint32_t keep_alive_interval;        /*!< Keep-alive interval time. Default is 5 (second) */
-    uint32_t keep_alive_count;           /*!< Keep-alive packet retry send count. Default is 3 counts */
+    bool disable_keep_alive;
+    int keep_alive_idle;            /*!< Keep-alive idle time. Default is 5 (second) */
+    int keep_alive_interval;        /*!< Keep-alive interval time. Default is 5 (second) */
+    int keep_alive_count;           /*!< Keep-alive packet retry send count. Default is 3 counts */
     bool use_global_ca_store;
     const char *cert;
     size_t cert_len;

@@ -255,6 +255,16 @@ static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, co
     }
 
     transport_http_proxy_t *proxy_handle = (transport_http_proxy_t *)esp_transport_get_context_data(transport);
+
+    if (config->disable_keep_alive) {
+        proxy_handle->keep_alive_cfg.keep_alive_enable = false;
+    } else {
+        proxy_handle->keep_alive_cfg.keep_alive_enable = true;
+        proxy_handle->keep_alive_cfg.keep_alive_interval = (config->keep_alive_interval == 0) ? HTTP_PROXY_KEEP_ALIVE_INTERVAL : config->keep_alive_interval;
+        proxy_handle->keep_alive_cfg.keep_alive_idle = (config->keep_alive_idle == 0) ? HTTP_PROXY_KEEP_ALIVE_IDLE : config->keep_alive_idle;
+        proxy_handle->keep_alive_cfg.keep_alive_count = (config->keep_alive_count == 0) ? HTTP_PROXY_KEEP_ALIVE_COUNT : config->keep_alive_count;
+    }
+
     if (!config->is_https_proxy) {
         proxy_handle->parent = esp_transport_tcp_init();
         if (proxy_handle->parent == NULL) {
@@ -268,6 +278,7 @@ static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, co
             return ret;
         }
 
+        esp_transport_tcp_set_keep_alive(proxy_handle->parent, &proxy_handle->keep_alive_cfg);
         esp_transport_tcp_set_interface_name(proxy_handle->parent, config->if_name);
     } else {
         proxy_handle->parent = esp_transport_ssl_init();
@@ -319,6 +330,9 @@ static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, co
         if (config->skip_cert_common_name_check) {
             esp_transport_ssl_skip_common_name_check(proxy_handle->parent);
         }
+
+        esp_transport_ssl_set_keep_alive(proxy_handle->parent, &proxy_handle->keep_alive_cfg);
+        esp_transport_ssl_set_interface_name(proxy_handle->parent, config->if_name);
     }
 
     return ESP_OK;
