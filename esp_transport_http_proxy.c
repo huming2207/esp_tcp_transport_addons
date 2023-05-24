@@ -219,6 +219,18 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
     return ESP_OK;
 }
 
+static int http_proxy_get_sockfd(esp_transport_handle_t transport)
+{
+    if (transport) {
+        transport_http_proxy_t *handle = esp_transport_get_context_data(transport);
+        if (handle && handle->parent && handle->parent->_get_socket) {
+            return handle->parent->_get_socket(handle->parent);
+        }
+    }
+
+    return -1;
+}
+
 static esp_err_t http_proxy_init_with_parent(esp_transport_handle_t transport, const esp_transport_http_proxy_config_t *config)
 {
     if (config == NULL || transport == NULL) {
@@ -390,7 +402,7 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
     }
 
     esp_transport_set_func(transport, http_proxy_connect, http_proxy_read, http_proxy_write, http_proxy_close, http_proxy_poll_read, http_proxy_poll_write, http_proxy_destroy);
-
+    transport->_get_socket = http_proxy_get_sockfd;
     *new_proxy_handle = transport;
     return ESP_OK;
 }
