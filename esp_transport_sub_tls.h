@@ -7,6 +7,7 @@
  * Configuration struct
  */
 typedef struct esp_transport_sub_tls {
+    int timeout_ms;
     bool use_global_ca_store;
     const char *cert;
     size_t cert_len;
@@ -18,3 +19,4 @@ typedef struct esp_transport_sub_tls {
     esp_err_t (*crt_bundle_attach)(void *conf);
 } esp_transport_sub_tls_t;
 
+esp_err_t esp_transport_sub_tls_init(esp_transport_handle_t *new_proxy_handle, esp_transport_handle_t parent_handle, const esp_transport_sub_tls_t *config);
