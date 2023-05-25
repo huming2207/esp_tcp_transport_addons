@@ -5,6 +5,7 @@
 #include <esp_transport_ssl.h>
 #include "esp_transport_http_proxy.h"
 #include "esp_transport_internal.h"
+#include "esp_transport_sub_tls.h"
 
 static const char *TAG = "trans_http_pxy";
 static const size_t MAX_HEADER_LEN = 1024;
@@ -405,4 +406,34 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
     transport->_get_socket = http_proxy_get_sockfd;
     *new_proxy_handle = transport;
     return ESP_OK;
+}
+
+esp_err_t esp_transport_create_proxied_plain_tcp(esp_transport_handle_t *new_proxied_handle, const esp_transport_http_proxy_config_t *config)
+{
+    // Do we need to do anything else??
+    return esp_transport_http_proxy_init(new_proxied_handle, config);
+}
+
+esp_err_t esp_transport_create_proxied_tls(esp_transport_handle_t *new_proxied_handle, const esp_transport_http_proxy_config_t *proxy_config, const esp_transport_sub_tls_t *tls_config)
+{
+    if (new_proxied_handle == NULL || proxy_config == NULL || tls_config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_transport_handle_t proxy_handle = NULL;
+    esp_err_t ret = esp_transport_http_proxy_init(&proxy_handle, proxy_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Proxy init failed: 0x%x", ret);
+        return ret;
+    }
+
+    esp_transport_handle_t tls_handle = NULL;
+    ret = esp_transport_sub_tls_init(&tls_handle, proxy_handle, tls_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "TLS init failed: 0x%x", ret);
+        return ret;
+    }
+
+    *new_proxied_handle = tls_handle;
+    return ret;
 }
