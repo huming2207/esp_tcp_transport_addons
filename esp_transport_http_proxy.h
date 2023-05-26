@@ -3,6 +3,10 @@
 #include <esp_transport.h>
 #include "esp_transport_sub_tls.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * Configuration struct
  */
@@ -32,3 +36,7 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
 esp_err_t esp_transport_create_proxied_plain_tcp(esp_transport_handle_t *new_proxied_handle, const esp_transport_http_proxy_config_t *config);
 esp_err_t esp_transport_create_proxied_tls(esp_transport_handle_t *new_proxied_handle,
                                            const esp_transport_http_proxy_config_t *proxy_config, const esp_transport_sub_tls_config_t *tls_config);
+
+#ifdef __cplusplus
+}
+#endif //__cplusplus

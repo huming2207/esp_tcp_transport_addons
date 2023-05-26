@@ -3,6 +3,10 @@
 #include <stdint.h>
 #include <esp_transport.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * Configuration struct
  */
@@ -20,3 +24,7 @@ typedef struct esp_transport_sub_tls_config {
 } esp_transport_sub_tls_config_t;
 
 esp_err_t esp_transport_sub_tls_init(esp_transport_handle_t *new_proxy_handle, esp_transport_handle_t parent_handle, const esp_transport_sub_tls_config_t *config);
+
+#ifdef __cplusplus
+}
+#endif //__cplusplus
