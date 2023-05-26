@@ -198,7 +198,7 @@ static int sub_tls_get_sockfd(esp_transport_handle_t transport)
     return -1;
 }
 
-esp_err_t esp_transport_sub_tls_init(esp_transport_handle_t *new_handle, esp_transport_handle_t parent_handle, const esp_transport_sub_tls_t *config)
+esp_err_t esp_transport_sub_tls_init(esp_transport_handle_t *new_handle, esp_transport_handle_t parent_handle, const esp_transport_sub_tls_config_t *config)
 {
     if (new_handle == NULL || parent_handle == NULL || config == NULL) {
         return ESP_ERR_INVALID_ARG;

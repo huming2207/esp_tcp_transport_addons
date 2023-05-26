@@ -414,7 +414,7 @@ esp_err_t esp_transport_create_proxied_plain_tcp(esp_transport_handle_t *new_pro
     return esp_transport_http_proxy_init(new_proxied_handle, config);
 }
 
-esp_err_t esp_transport_create_proxied_tls(esp_transport_handle_t *new_proxied_handle, const esp_transport_http_proxy_config_t *proxy_config, const esp_transport_sub_tls_t *tls_config)
+esp_err_t esp_transport_create_proxied_tls(esp_transport_handle_t *new_proxied_handle, const esp_transport_http_proxy_config_t *proxy_config, const esp_transport_sub_tls_config_t *tls_config)
 {
     if (new_proxied_handle == NULL || proxy_config == NULL || tls_config == NULL) {
         return ESP_ERR_INVALID_ARG;
