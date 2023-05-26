@@ -210,6 +210,13 @@ esp_err_t esp_transport_sub_tls_init(esp_transport_handle_t *new_handle, esp_tra
         return ESP_FAIL;
     }
 
+    // This is a workaround for WebSocket transport
+    if (parent_handle->foundation == NULL) {
+        transport->foundation = esp_transport_init_foundation_transport();
+    } else {
+        transport->foundation = parent_handle->foundation;
+    }
+
     transport_sub_tls_t *handle = calloc(1, sizeof(transport_sub_tls_t));
     if (handle == NULL) {
         ESP_LOGE(TAG, "Failed to create transport context");
