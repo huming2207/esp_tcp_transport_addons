@@ -1,5 +1,6 @@
 #include <esp_tls.h>
 #include <esp_log.h>
+#include <esp_tls_mbedtls.h>
 #include "esp_transport_internal.h"
 #include "esp_transport_sub_tls.h"
 
@@ -12,11 +13,178 @@ typedef struct transport_sub_tls {
     esp_transport_handle_t parent;
 } transport_sub_tls_t;
 
+/*
+ * Check if the requested operation would be blocking on a non-blocking socket
+ * and thus 'failed' with a negative return value.
+ *
+ * Note: on a blocking socket this function always returns 0!
+ */
+static int sub_tls_net_would_block(const mbedtls_net_context *ctx)
+{
+    int error = errno;
+
+    switch (errno = error) {
+#if defined EAGAIN
+        case EAGAIN:
+#endif
+#if defined EWOULDBLOCK && EWOULDBLOCK != EAGAIN
+            case EWOULDBLOCK:
+#endif
+            return 1;
+    }
+    return 0;
+}
+
+// Remember the ctx here is transport_sub_tls_t!!
+static int mbedtls_over_tcp_trans_recv(void *ctx, unsigned char *buf, size_t len)
+{
+    if (ctx == NULL) {
+        return MBEDTLS_ERR_NET_INVALID_CONTEXT;
+    }
+
+    transport_sub_tls_t *handle = (transport_sub_tls_t *)ctx;
+    int ret = esp_transport_read(handle->parent, (char *)buf, (int)len, handle->cfg.timeout_ms);
+
+    if ( ret < 0 ) {
+        if (sub_tls_net_would_block(ctx) != 0) {
+            return MBEDTLS_ERR_SSL_WANT_READ;
+        }
+
+        if (errno == EPIPE || errno == ECONNRESET) {
+            return MBEDTLS_ERR_NET_CONN_RESET;
+        }
+
+        if (errno == EINTR) {
+            return MBEDTLS_ERR_SSL_WANT_READ;
+        }
+
+        return MBEDTLS_ERR_NET_RECV_FAILED;
+    }
+
+    return ret;
+}
+
+// Remember the ctx here is transport_sub_tls_t!!
+static int mbedtls_over_tcp_trans_send(void *ctx, const unsigned char *buf, size_t len)
+{
+    if (ctx == NULL) {
+        return MBEDTLS_ERR_NET_INVALID_CONTEXT;
+    }
+
+    transport_sub_tls_t *handle = (transport_sub_tls_t *)ctx;
+    int ret = esp_transport_write(handle->parent, (const char *)buf, (int)len, handle->cfg.timeout_ms);
+
+    if (ret < 0) {
+        if (sub_tls_net_would_block(ctx) != 0) {
+            return MBEDTLS_ERR_SSL_WANT_WRITE;
+        }
+
+        if (errno == EPIPE || errno == ECONNRESET) {
+            return MBEDTLS_ERR_NET_CONN_RESET;
+        }
+
+        if (errno == EINTR) {
+            return MBEDTLS_ERR_SSL_WANT_WRITE;
+        }
+
+        return MBEDTLS_ERR_NET_SEND_FAILED;
+    }
+
+    return ret;
+}
+
+/* This function shall return the error message when appropriate log level has been set, otherwise this function shall do nothing */
+static void sub_tls_mbedtls_print_error_msg(int error)
+{
+#if (CONFIG_LOG_DEFAULT_LEVEL_DEBUG || CONFIG_LOG_DEFAULT_LEVEL_VERBOSE)
+    static char error_buf[100];
+    mbedtls_strerror(error, error_buf, sizeof(error_buf));
+    ESP_LOGI(TAG, "(%04X): %s", error, error_buf);
+#endif
+}
+
+static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, size_t hostlen, const void *cfg, esp_tls_t *tls, transport_sub_tls_t *sub_tls_handle)
+{
+    assert(cfg != NULL);
+    assert(tls != NULL);
+    int ret;
+    esp_err_t esp_ret = ESP_FAIL;
+
+#ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
+    psa_status_t status = psa_crypto_init();
+    if (status != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "Failed to initialize PSA crypto, returned %d\n", (int) status);
+        return esp_ret;
+    }
+#endif // CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
+
+    tls->server_fd.fd = tls->sockfd;
+    mbedtls_ssl_init(&tls->ssl);
+    mbedtls_ctr_drbg_init(&tls->ctr_drbg);
+    mbedtls_ssl_config_init(&tls->conf);
+    mbedtls_entropy_init(&tls->entropy);
+
+    if (tls->role == ESP_TLS_CLIENT) {
+        esp_ret = set_client_config(hostname, hostlen, (esp_tls_cfg_t *)cfg, tls);
+        if (esp_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set client configurations, returned [0x%04X] (%s)", esp_ret, esp_err_to_name(esp_ret));
+            goto exit;
+        }
+    } else if (tls->role == ESP_TLS_SERVER) {
+#ifdef CONFIG_ESP_TLS_SERVER
+        esp_ret = set_server_config((esp_tls_cfg_server_t *) cfg, tls);
+        if (esp_ret != 0) {
+            ESP_LOGE(TAG, "Failed to set server configurations, returned [0x%04X] (%s)", esp_ret, esp_err_to_name(esp_ret));
+            goto exit;
+        }
+#else
+        ESP_LOGE(TAG, "ESP_TLS_SERVER Not enabled in Kconfig");
+        goto exit;
+#endif
+    }
+
+    if ((ret = mbedtls_ctr_drbg_seed(&tls->ctr_drbg,
+                                     mbedtls_entropy_func, &tls->entropy, NULL, 0)) != 0) {
+        ESP_LOGE(TAG, "mbedtls_ctr_drbg_seed returned -0x%04X", -ret);
+        sub_tls_mbedtls_print_error_msg(ret);
+        esp_ret = ESP_ERR_MBEDTLS_CTR_DRBG_SEED_FAILED;
+        goto exit;
+    }
+
+    mbedtls_ssl_set_user_data_p(&tls->ssl, sub_tls_handle);
+    mbedtls_ssl_conf_rng(&tls->conf, mbedtls_ctr_drbg_random, &tls->ctr_drbg);
+
+#ifdef CONFIG_MBEDTLS_DEBUG
+    mbedtls_esp_enable_debug_log(&tls->conf, CONFIG_MBEDTLS_DEBUG_LEVEL);
+#endif
+
+#ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
+    mbedtls_ssl_conf_min_tls_version(&tls->conf, MBEDTLS_SSL_VERSION_TLS1_3);
+    mbedtls_ssl_conf_max_tls_version(&tls->conf, MBEDTLS_SSL_VERSION_TLS1_3);
+#endif
+
+    if ((ret = mbedtls_ssl_setup(&tls->ssl, &tls->conf)) != 0) {
+        ESP_LOGE(TAG, "mbedtls_ssl_setup returned -0x%04X", -ret);
+        sub_tls_mbedtls_print_error_msg(ret);
+        esp_ret = ESP_ERR_MBEDTLS_SSL_SETUP_FAILED;
+        goto exit;
+    }
+    mbedtls_ssl_set_bio(&tls->ssl, sub_tls_handle, mbedtls_over_tcp_trans_send, mbedtls_over_tcp_trans_recv, NULL);
+
+    return ESP_OK;
+
+exit:
+    esp_mbedtls_cleanup(tls);
+    return esp_ret;
+}
+
 static int sub_tls_connect(esp_transport_handle_t transport, const char *const host, int port, int timeout_ms)
 {
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL || handle->parent == NULL || handle->parent->_get_socket == NULL) {
         ESP_LOGE(TAG, "Unsupported parent transport");
+        ESP_LOGE(TAG, "Handle: %p", handle);
+        if (handle->parent) ESP_LOGE(TAG, "Handle parent: %p, get_socket %p", handle->parent, handle->parent->_get_socket);
         return -1;
     }
 
@@ -38,8 +206,17 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
         return -2;
     }
 
+    // Now we create our custom magic mbedTLS handle
+    esp_err_t ret = sub_tls_create_mbedtls_handle(host, strlen(host), (void *)&handle->cfg, handle->tls, handle);
+    handle->tls->read = esp_mbedtls_read;
+    handle->tls->write = esp_mbedtls_write;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed when creating mbedTLS handle: 0x%x", ret);
+        return ret;
+    }
+
     // Here we assume we have a connection already, and we "fast-track" the state to handshake only
-    esp_err_t ret = esp_tls_set_conn_state(handle->tls, ESP_TLS_CONNECTING);
+    ret = esp_tls_set_conn_state(handle->tls, ESP_TLS_HANDSHAKE);
 
     // We also manually provide the socket FD to esp-tls to let it does its job
     ret = ret ?: esp_tls_set_conn_sockfd(handle->tls, sock_fd);
@@ -48,6 +225,7 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
         return -3;
     }
 
+    ESP_LOGI(TAG, "TLS connecting to host %s; port %d", host, port);
     conn_ret = esp_tls_conn_new_sync(host, (int)strlen(host), port, &handle->cfg, handle->tls);
     if (conn_ret != 1) {
         ESP_LOGE(TAG, "TLS setup/handshake failed: %d", conn_ret);
@@ -273,6 +451,7 @@ esp_err_t esp_transport_sub_tls_init(esp_transport_handle_t *new_handle, esp_tra
     handle->cfg.timeout_ms = config->timeout_ms;
     handle->cfg.is_plain_tcp = false; // Does this really matter??
     handle->cfg.non_block = false; // Seems like this is needed - otherwise it will do the select() crap
+    handle->parent = parent_handle;
 
     *new_handle = transport;
     return ESP_OK;
