@@ -14,6 +14,8 @@ static const size_t MAX_HEADER_LEN = 1024;
 #define HTTP_PROXY_KEEP_ALIVE_INTERVAL   (5)
 #define HTTP_PROXY_KEEP_ALIVE_COUNT      (3)
 
+static const char *proxy_alpn_cfgs[2] = { "http/1.1", NULL };
+
 typedef struct transport_http_proxy_t {
     uint16_t proxy_port;
     esp_transport_handle_t parent;
@@ -72,7 +74,7 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
     }
 
     ESP_LOGI(TAG, "Connecting to host via proxy: %s:%d", host, port);
-    snprintf(connect_header, MAX_HEADER_LEN, "CONNECT %s:%u HTTP/1.1\r\n"
+    snprintf(connect_header, MAX_HEADER_LEN, "CONNECT %s:%d HTTP/1.1\r\n"
                                              "Host: %s\r\n"
                                              "User-Agent: %s\r\n"
                                              "Proxy-Connection: Keep-Alive\r\n"
@@ -110,7 +112,7 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
     }
 
     if (status_code != 200) {
-        ESP_LOGE(TAG, "CONNECT responded with failed status code: %d", status_code);
+        ESP_LOGE(TAG, "CONNECT responded with failed status code: %d\n===\nHeader\n===\n%s\n======", status_code, connect_header);
         free(connect_header);
         return -1;
     }
@@ -305,6 +307,8 @@ static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, co
             ESP_LOGE(TAG, "Failed to set SSL port: 0x%x", ret);
             return ret;
         }
+
+        esp_transport_ssl_set_alpn_protocol(proxy_handle->parent, proxy_alpn_cfgs);
 
         if (config->use_global_ca_store == true) {
             esp_transport_ssl_enable_global_ca_store(proxy_handle->parent);
