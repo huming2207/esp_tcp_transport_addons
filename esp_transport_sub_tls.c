@@ -47,14 +47,7 @@ static int mbedtls_over_tcp_trans_recv(void *ctx, unsigned char *buf, size_t len
     transport_sub_tls_t *handle = (transport_sub_tls_t *)ctx;
     ESP_LOGD(TAG, "Recv: ctx %p, buf %p, len %d", ctx, buf, len);
 
-    int poll_read;
-    if ((poll_read = esp_transport_poll_read(handle->parent, handle->cfg.timeout_ms)) <= 0) {
-        ESP_LOGE(TAG, "Poll read timeout: %d", poll_read);
-        return poll_read;
-    }
-
     int ret = esp_transport_read(handle->parent, (char *)buf, (int)len, handle->cfg.timeout_ms);
-
 
     ESP_LOGD(TAG, "Recv: done, ret %d", ret);
 
@@ -87,12 +80,6 @@ static int mbedtls_over_tcp_trans_send(void *ctx, const unsigned char *buf, size
 
     transport_sub_tls_t *handle = (transport_sub_tls_t *)ctx;
     ESP_LOGD(TAG, "Send: ctx %p, parent %p, buf %p, len %d", ctx, handle->parent, buf, len);
-
-    int poll_write;
-    if ((poll_write = esp_transport_poll_write(handle->parent, handle->cfg.timeout_ms)) <= 0) {
-        ESP_LOGE(TAG, "Error when poll write");
-        return poll_write;
-    }
 
     int ret = esp_transport_write(handle->parent, (const char *)buf, (int)len, handle->cfg.timeout_ms);
 
@@ -283,11 +270,6 @@ static int sub_tls_write(esp_transport_handle_t transport, const char *buffer, i
         return -1;
     }
 
-    if ((poll = esp_transport_poll_write(transport, timeout_ms)) <= 0) {
-        ESP_LOGW(TAG, "Write poll timeout or error, errno=%s, fd=%d, timeout_ms=%d", strerror(errno), handle->sock_fd, timeout_ms);
-        return poll;
-    }
-
     int ret = esp_tls_conn_write(handle->tls, (const unsigned char *) buffer, len);
     if (ret < 0) {
         ESP_LOGE(TAG, "esp_tls_conn_write error, errno=%s", strerror(errno));
@@ -312,18 +294,6 @@ static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len,
     if (handle == NULL) {
         return -1;
     }
-
-    int poll = esp_transport_poll_read(transport, timeout_ms);
-    if (poll == -1) {
-        ESP_LOGW(TAG, "Read poll error, errno=%s, fd=%d, timeout_ms=%d", strerror(errno), handle->sock_fd, timeout_ms);
-        return ERR_TCP_TRANSPORT_CONNECTION_FAILED;
-    }
-
-    if (poll == 0) {
-        ESP_LOGE(TAG, "Read poll timeout, errno=%s, fd=%d, timeout_ms=%d", strerror(errno), handle->sock_fd, timeout_ms);
-        return ERR_TCP_TRANSPORT_CONNECTION_TIMEOUT;
-    }
-
 
     int ret = esp_tls_conn_read(handle->tls, (unsigned char *)buffer, len);
     if (ret < 0) {
@@ -356,7 +326,7 @@ static int sub_tls_poll_read(esp_transport_handle_t transport, int timeout_ms)
         return -1;
     }
 
-    return esp_transport_poll_read(handle->parent, timeout_ms);
+    return esp_transport_poll_read(handle->parent, handle->cfg.timeout_ms > timeout_ms ? handle->cfg.timeout_ms : timeout_ms);
 }
 
 static int sub_tls_poll_write(esp_transport_handle_t transport, int timeout_ms)
@@ -366,7 +336,7 @@ static int sub_tls_poll_write(esp_transport_handle_t transport, int timeout_ms)
         return -1;
     }
 
-    return esp_transport_poll_write(handle->parent, timeout_ms);
+    return esp_transport_poll_write(handle->parent, handle->cfg.timeout_ms > timeout_ms ? handle->cfg.timeout_ms : timeout_ms);
 }
 
 static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
@@ -476,7 +446,7 @@ esp_err_t esp_transport_sub_tls_init(esp_transport_handle_t *new_handle, esp_tra
     handle->cfg.skip_common_name = config->skip_cert_common_name_check;
     handle->cfg.timeout_ms = config->timeout_ms;
     handle->cfg.is_plain_tcp = false; // Does this really matter??
-    handle->cfg.non_block = false; // Seems like this is needed - otherwise it will do the select() crap
+    handle->cfg.non_block = true; // Seems like this is needed - otherwise it will do the select() crap
     handle->parent = parent_handle;
 
     *new_handle = transport;
