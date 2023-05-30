@@ -39,11 +39,24 @@ static int sub_tls_net_would_block(const mbedtls_net_context *ctx)
 static int mbedtls_over_tcp_trans_recv(void *ctx, unsigned char *buf, size_t len)
 {
     if (ctx == NULL) {
+        ESP_LOGE(TAG, "Context is null");
         return MBEDTLS_ERR_NET_INVALID_CONTEXT;
     }
 
+
     transport_sub_tls_t *handle = (transport_sub_tls_t *)ctx;
+    ESP_LOGD(TAG, "Recv: ctx %p, buf %p, len %d", ctx, buf, len);
+
+    int poll_read;
+    if ((poll_read = esp_transport_poll_read(handle->parent, handle->cfg.timeout_ms)) <= 0) {
+        ESP_LOGE(TAG, "Poll read timeout: %d", poll_read);
+        return poll_read;
+    }
+
     int ret = esp_transport_read(handle->parent, (char *)buf, (int)len, handle->cfg.timeout_ms);
+
+
+    ESP_LOGD(TAG, "Recv: done, ret %d", ret);
 
     if ( ret < 0 ) {
         if (sub_tls_net_would_block(ctx) != 0) {
@@ -68,11 +81,22 @@ static int mbedtls_over_tcp_trans_recv(void *ctx, unsigned char *buf, size_t len
 static int mbedtls_over_tcp_trans_send(void *ctx, const unsigned char *buf, size_t len)
 {
     if (ctx == NULL) {
+        ESP_LOGE(TAG, "Context is null");
         return MBEDTLS_ERR_NET_INVALID_CONTEXT;
     }
 
     transport_sub_tls_t *handle = (transport_sub_tls_t *)ctx;
+    ESP_LOGD(TAG, "Send: ctx %p, parent %p, buf %p, len %d", ctx, handle->parent, buf, len);
+
+    int poll_write;
+    if ((poll_write = esp_transport_poll_write(handle->parent, handle->cfg.timeout_ms)) <= 0) {
+        ESP_LOGE(TAG, "Error when poll write");
+        return poll_write;
+    }
+
     int ret = esp_transport_write(handle->parent, (const char *)buf, (int)len, handle->cfg.timeout_ms);
+
+    ESP_LOGD(TAG, "Send: done, ret %d", ret);
 
     if (ret < 0) {
         if (sub_tls_net_would_block(ctx) != 0) {
@@ -237,12 +261,13 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
 
 static int sub_tls_close(esp_transport_handle_t transport)
 {
+    ESP_LOGD(TAG, "TLS closing!");
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL) {
         return -1;
     }
 
-    int ret = esp_tls_conn_destroy(handle->tls);
+    int ret = esp_transport_close(handle->parent);
     if (ret >= 0) {
         handle->tls = NULL;
     }
@@ -331,7 +356,7 @@ static int sub_tls_poll_read(esp_transport_handle_t transport, int timeout_ms)
         return -1;
     }
 
-    return esp_transport_poll_read(transport, timeout_ms);
+    return esp_transport_poll_read(handle->parent, timeout_ms);
 }
 
 static int sub_tls_poll_write(esp_transport_handle_t transport, int timeout_ms)
@@ -341,11 +366,12 @@ static int sub_tls_poll_write(esp_transport_handle_t transport, int timeout_ms)
         return -1;
     }
 
-    return esp_transport_poll_write(transport, timeout_ms);
+    return esp_transport_poll_write(handle->parent, timeout_ms);
 }
 
 static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
 {
+    ESP_LOGD(TAG, "Destroying!");
     if (transport == NULL) {
         return ESP_OK;
     }
