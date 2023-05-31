@@ -2,7 +2,28 @@
 
 ## Usage 
 
-TBD, see SOCKS4 implementations in ESP-IDF
+For example, if you want to set up an HTTPS or WSS over a HTTPS proxy, try this:
+
+```c++
+esp_transport_handle_t https_proxied_handle = nullptr;
+esp_transport_http_proxy_config_t proxy_config = {};
+proxy_config.is_https_proxy = true;
+proxy_config.proxy_host = "your.proxy.server.host";
+proxy_config.proxy_port = 443;
+proxy_config.use_global_ca_store = true;
+
+esp_transport_sub_tls_config_t sub_tls_config = {};
+sub_tls_config.use_global_ca_store = true;
+sub_tls_config.timeout_ms = 130000;
+
+auto ret = esp_transport_create_proxied_tls(&https_proxied_handle, &proxy_config, &sub_tls_config);
+if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Proxy creation failed: 0x%x %s", ret, esp_err_to_name(ret));
+    return ret;
+}
+```
+
+...then the `https_proxied_handle` is the TCP transport handle you want to play with, e.g. call `esp_transport_write()` to send stuff.
 
 ## Disclaimer 声明
 
@@ -13,3 +34,5 @@ This project is indended to let an ESP32 device to access to access external ser
 ## License
 
 MIT
+
+Copyright (C) 2023, Jackson Ming Hu at SmartGuide Pty Ltd
