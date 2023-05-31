@@ -263,7 +263,6 @@ static int sub_tls_close(esp_transport_handle_t transport)
 
 static int sub_tls_write(esp_transport_handle_t transport, const char *buffer, int len, int timeout_ms)
 {
-    int poll;
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL) {
         return -1;
