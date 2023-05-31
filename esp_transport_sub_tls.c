@@ -7,7 +7,6 @@
 static const char *TAG = "trans_sub_tls";
 
 typedef struct transport_sub_tls {
-    int sock_fd;
     esp_tls_t *tls;
     esp_tls_cfg_t cfg;
     esp_transport_handle_t parent;
