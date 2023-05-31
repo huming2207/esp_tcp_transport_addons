@@ -1,5 +1,9 @@
 # HTTP Proxy support plugin for ESP-IDF TCP transport
 
+## Introduction
+
+This is an out-of-tree (out of ESP-IDF SDK) PoC component library for enabling HTTP/HTTPS proxy support for anything that uses `tcp_transport`, such as HTTP client, WebSocket client, MQTT clients or any self-defined `tcp_transport` handles.
+
 ## Usage 
 
 For example, if you want to set up an HTTPS or WSS over a HTTPS proxy, try this:
