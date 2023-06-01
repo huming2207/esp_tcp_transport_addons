@@ -352,6 +352,12 @@ static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, co
         esp_transport_ssl_set_interface_name(proxy_handle->parent, config->if_name);
     }
 
+    if (proxy_handle->parent->foundation != NULL) {
+        transport->foundation = proxy_handle->parent->foundation;
+    } else {
+        transport->foundation = esp_transport_init_foundation_transport(); // Might be just a placeholder
+    }
+
     return ESP_OK;
 }
 
