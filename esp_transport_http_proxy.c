@@ -3,12 +3,13 @@
 #include <lwip/sockets.h>
 #include <esp_transport_tcp.h>
 #include <esp_transport_ssl.h>
+#include <http_parser.h>
 #include "esp_transport_http_proxy.h"
 #include "esp_transport_internal.h"
 #include "esp_transport_sub_tls.h"
 
 static const char *TAG = "trans_http_pxy";
-static const size_t MAX_HEADER_LEN = 1024;
+static const size_t MAX_HEADER_LEN = 8192;
 
 #define HTTP_PROXY_KEEP_ALIVE_IDLE       (5)
 #define HTTP_PROXY_KEEP_ALIVE_INTERVAL   (5)
@@ -18,47 +19,104 @@ static const char *proxy_alpn_cfgs[2] = { "http/1.1", NULL };
 
 typedef struct transport_http_proxy_t {
     uint16_t proxy_port;
+    uint16_t last_http_state;
     esp_transport_handle_t parent;
     char *proxy_host;
     char *user_agent;
     esp_transport_keep_alive_t keep_alive_cfg;
+    http_parser header_parser;
+    http_parser_settings header_parser_cfg;
+    char curr_header_key[32];
 } transport_http_proxy_t;
 
-static int get_http_status_code(const char *buffer)
+static int get_port(const char *url, struct http_parser_url *u)
 {
-    const char http[] = "HTTP/";
-    const char *found = strcasestr(buffer, http);
-    char status_code[4] = { 0 };
-    char *end_ptr = NULL;
-    if (found) {
-        found += sizeof(http)/sizeof(http[0]) - 1;
-        found = strchr(found, ' ');
-        if (found) {
-            found++;
-            strncpy(status_code, found, 4);
-            status_code[3] = '\0';
-            int code = (int)strtol(status_code, &end_ptr, 10);
-            ESP_LOGD(TAG, "HTTP status code is %d", code);
-            return code == 0 ? -1 : code;
+    if (u->field_data[UF_PORT].len) {
+        return strtol(&url[u->field_data[UF_PORT].off], NULL, 10);
+    } else {
+        if (strncasecmp(&url[u->field_data[UF_SCHEMA].off], "http", u->field_data[UF_SCHEMA].len) == 0) {
+            return 80;
+        } else if (strncasecmp(&url[u->field_data[UF_SCHEMA].off], "https", u->field_data[UF_SCHEMA].len) == 0) {
+            return 443;
+        }
+    }
+    return 0;
+}
+
+static int http_on_url(http_parser *parser, const char *at, size_t length)
+{
+    return 0;
+}
+
+static int http_on_status(http_parser *parser, const char *at, size_t length)
+{
+    return 0;
+}
+
+static int http_on_header_field(http_parser *parser, const char *at, size_t length)
+{
+    transport_http_proxy_t *handle = parser->data;
+    size_t cpy_len = (length > (sizeof(handle->curr_header_key) - 1)) ? (sizeof(handle->curr_header_key) - 1) : length;
+    strncpy(handle->curr_header_key, at, cpy_len);
+
+    ESP_LOGD(TAG, "Got header: %s, len %d", handle->curr_header_key, cpy_len);
+    return 0; // Unused
+}
+
+static int http_on_header_value(http_parser *parser, const char *at, size_t length)
+{
+    transport_http_proxy_t *handle = parser->data;
+    if (strncasecmp(handle->curr_header_key, "location", (sizeof(handle->curr_header_key) - 1)) == 0) {
+        struct http_parser_url url_parse_state = {};
+        http_parser_url_init(&url_parse_state);
+        if (http_parser_parse_url(at, length, 0, &url_parse_state) == 0) {
+            if (handle->proxy_host != NULL) {
+                free(handle->proxy_host);
+            }
+
+            handle->proxy_host = strndup(&at[url_parse_state.field_data[UF_HOST].off], url_parse_state.field_data[UF_HOST].len);
+            handle->proxy_port = get_port(at, &url_parse_state);
+        } else {
+            ESP_LOGW(TAG, "Location header found but failed to parse URL:");
+            ESP_LOG_BUFFER_CHAR_LEVEL(TAG, at, length, ESP_LOG_WARN);
         }
     }
 
-    return -1;
+    return 0;
 }
 
-static int http_proxy_connect(esp_transport_handle_t transport, const char *const host, int port, int timeout_ms)
+static int http_on_headers_complete(http_parser *parser)
 {
-    if (transport == NULL) {
-        ESP_LOGE(TAG, "Transport context is null at connect!");
-        return -1;
-    }
+    return 0;
+}
 
-    transport_http_proxy_t *handle = esp_transport_get_context_data(transport);
-    if (handle == NULL) {
-        ESP_LOGE(TAG, "Internal context is null at connect!");
-        return -1;
-    }
+static int http_on_body(http_parser *parser, const char *at, size_t length)
+{
+    return 0; // Unused
+}
 
+static int http_on_message_begin(http_parser *parser)
+{
+    return 0;
+}
+
+static int http_on_message_complete(http_parser *parser)
+{
+    return 0; // Unused
+}
+
+static int http_on_chunk_header(http_parser *parser)
+{
+    return 0; // Unused
+}
+
+static int http_on_chunk_complete(http_parser *parser)
+{
+    return 0; // Unused
+}
+
+static int http_proxy_connect_follow_redirect(transport_http_proxy_t *handle, const char *const host, int port, int timeout_ms)
+{
     char *connect_header = calloc(MAX_HEADER_LEN, sizeof(char));
     if (connect_header == NULL) {
         ESP_LOGE(TAG, "Failed to allocate header buffer");
@@ -79,7 +137,7 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
                                              "User-Agent: %s\r\n"
                                              "Proxy-Connection: Keep-Alive\r\n"
                                              "\r\n",
-                                             host, port, host, handle->user_agent == NULL ? "ESP-IDF/1.0" : handle->user_agent);
+             host, port, host, handle->user_agent == NULL ? "ESP-IDF/1.0" : handle->user_agent);
 
     // Perform the CONNECT
     size_t connect_header_len = strnlen(connect_header, MAX_HEADER_LEN);
@@ -104,21 +162,58 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
         connect_header[header_len] = '\0';
     } while (strstr(connect_header, "\r\n\r\n") == NULL && header_len < (MAX_HEADER_LEN - 1));
 
-    int status_code = get_http_status_code(connect_header);
-    if (status_code < 0) {
-        ESP_LOGE(TAG, "Invalid CONNECT response - can't even find status code?");
+    size_t parsed_len = http_parser_execute(&handle->header_parser, &handle->header_parser_cfg, connect_header, header_len);
+    if (parsed_len < 1) {
+        ESP_LOGE(TAG, "Failed to parse header!");
         free(connect_header);
         return -1;
     }
 
+    uint32_t status_code = handle->header_parser.status_code;
+    handle->last_http_state = status_code;
+
+    if (status_code >= 300 && status_code <= 399) {
+        ESP_LOGW(TAG, "Redirection found: %lu; new location: %s port %u", status_code, handle->proxy_host, handle->proxy_port);
+        free(connect_header);
+        return 0;
+    }
+
     if (status_code != 200) {
-        ESP_LOGE(TAG, "CONNECT responded with failed status code: %d\n===\nHeader\n===\n%s\n======", status_code, connect_header);
+        ESP_LOGE(TAG, "CONNECT responded with failed status code: %lu\n===\nHeader\n===\n%s\n======", status_code, connect_header);
         free(connect_header);
         return -1;
     }
 
     free(connect_header);
     return 0;
+}
+
+static int http_proxy_connect(esp_transport_handle_t transport, const char *const host, int port, int timeout_ms)
+{
+    if (transport == NULL) {
+        ESP_LOGE(TAG, "Transport context is null at connect!");
+        return -1;
+    }
+
+    transport_http_proxy_t *handle = esp_transport_get_context_data(transport);
+    if (handle == NULL) {
+        ESP_LOGE(TAG, "Internal context is null at connect!");
+        return -1;
+    }
+
+    int ret = http_proxy_connect_follow_redirect(handle, host, port, timeout_ms);
+    if (ret != 0) {
+        return ret;
+    }
+
+    while (handle->last_http_state >= 300 && handle->last_http_state <= 399) {
+        ret = http_proxy_connect_follow_redirect(handle, host, port, timeout_ms);
+        if (ret != 0) {
+            return ret;
+        }
+    }
+
+    return ret;
 }
 
 static int http_proxy_close(esp_transport_handle_t transport)
@@ -382,6 +477,20 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
         esp_transport_set_context_data(transport, proxy_handle);
     }
 
+    http_parser_init(&proxy_handle->header_parser, HTTP_RESPONSE);
+    http_parser_settings_init(&proxy_handle->header_parser_cfg);
+    proxy_handle->header_parser_cfg.on_body = http_on_body;
+    proxy_handle->header_parser_cfg.on_chunk_complete = http_on_chunk_complete;
+    proxy_handle->header_parser_cfg.on_chunk_header = http_on_chunk_header;
+    proxy_handle->header_parser_cfg.on_header_field = http_on_header_field;
+    proxy_handle->header_parser_cfg.on_header_value = http_on_header_value;
+    proxy_handle->header_parser_cfg.on_headers_complete = http_on_headers_complete;
+    proxy_handle->header_parser_cfg.on_message_begin = http_on_message_begin;
+    proxy_handle->header_parser_cfg.on_message_complete = http_on_message_complete;
+    proxy_handle->header_parser_cfg.on_status = http_on_status;
+    proxy_handle->header_parser_cfg.on_url = http_on_url;
+    proxy_handle->header_parser.data = proxy_handle;
+
     if (config->parent_handle != NULL) {
         esp_err_t ret = http_proxy_init_with_parent(transport, config);
         if (ret != ESP_OK) {
@@ -415,6 +524,7 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
     esp_transport_set_func(transport, http_proxy_connect, http_proxy_read, http_proxy_write, http_proxy_close, http_proxy_poll_read, http_proxy_poll_write, http_proxy_destroy);
     transport->_get_socket = http_proxy_get_sockfd;
     *new_proxy_handle = transport;
+
     return ESP_OK;
 }
 
