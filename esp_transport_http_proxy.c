@@ -20,6 +20,7 @@ static const char *proxy_alpn_cfgs[2] = { "http/1.1", NULL };
 typedef struct transport_http_proxy_t {
     uint16_t proxy_port;
     uint16_t last_http_state;
+    int32_t redir_retry_cnt;
     esp_transport_handle_t parent;
     char *proxy_host;
     char *user_agent;
@@ -40,16 +41,6 @@ static int get_port(const char *url, struct http_parser_url *u)
             return 443;
         }
     }
-    return 0;
-}
-
-static int http_on_url(http_parser *parser, const char *at, size_t length)
-{
-    return 0;
-}
-
-static int http_on_status(http_parser *parser, const char *at, size_t length)
-{
     return 0;
 }
 
@@ -83,36 +74,6 @@ static int http_on_header_value(http_parser *parser, const char *at, size_t leng
     }
 
     return 0;
-}
-
-static int http_on_headers_complete(http_parser *parser)
-{
-    return 0;
-}
-
-static int http_on_body(http_parser *parser, const char *at, size_t length)
-{
-    return 0; // Unused
-}
-
-static int http_on_message_begin(http_parser *parser)
-{
-    return 0;
-}
-
-static int http_on_message_complete(http_parser *parser)
-{
-    return 0; // Unused
-}
-
-static int http_on_chunk_header(http_parser *parser)
-{
-    return 0; // Unused
-}
-
-static int http_on_chunk_complete(http_parser *parser)
-{
-    return 0; // Unused
 }
 
 static int http_proxy_connect_follow_redirect(transport_http_proxy_t *handle, const char *const host, int port, int timeout_ms)
@@ -206,8 +167,10 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
         return ret;
     }
 
-    while (handle->last_http_state >= 300 && handle->last_http_state <= 399) {
+    int32_t redir_cnt = handle->redir_retry_cnt;
+    while (handle->last_http_state >= 300 && handle->last_http_state <= 399 && redir_cnt >= 0) {
         ret = http_proxy_connect_follow_redirect(handle, host, port, timeout_ms);
+        redir_cnt -= 1;
         if (ret != 0) {
             return ret;
         }
@@ -366,6 +329,7 @@ static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, co
 
     transport_http_proxy_t *proxy_handle = (transport_http_proxy_t *)esp_transport_get_context_data(transport);
 
+    proxy_handle->redir_retry_cnt = config->redir_retry_cnt;
     if (config->disable_keep_alive) {
         proxy_handle->keep_alive_cfg.keep_alive_enable = false;
     } else {
@@ -479,16 +443,8 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
 
     http_parser_init(&proxy_handle->header_parser, HTTP_RESPONSE);
     http_parser_settings_init(&proxy_handle->header_parser_cfg);
-    proxy_handle->header_parser_cfg.on_body = http_on_body;
-    proxy_handle->header_parser_cfg.on_chunk_complete = http_on_chunk_complete;
-    proxy_handle->header_parser_cfg.on_chunk_header = http_on_chunk_header;
     proxy_handle->header_parser_cfg.on_header_field = http_on_header_field;
     proxy_handle->header_parser_cfg.on_header_value = http_on_header_value;
-    proxy_handle->header_parser_cfg.on_headers_complete = http_on_headers_complete;
-    proxy_handle->header_parser_cfg.on_message_begin = http_on_message_begin;
-    proxy_handle->header_parser_cfg.on_message_complete = http_on_message_complete;
-    proxy_handle->header_parser_cfg.on_status = http_on_status;
-    proxy_handle->header_parser_cfg.on_url = http_on_url;
     proxy_handle->header_parser.data = proxy_handle;
 
     if (config->parent_handle != NULL) {
