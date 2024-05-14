@@ -15,6 +15,7 @@ typedef struct esp_transport_http_proxy_config_t {
     const char *proxy_host;
     const char *user_agent;
     bool is_https_proxy;
+    int32_t redir_retry_cnt;
     esp_transport_handle_t parent_handle;           /*!< Specify a parent handle here to let this HTTP proxy to run on it - or keep it null to create a new one by its own */
     struct ifreq *if_name;
     bool disable_keep_alive;
