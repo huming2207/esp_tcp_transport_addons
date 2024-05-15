@@ -1,8 +1,12 @@
+#include <stdint.h>
 #include <esp_transport.h>
 #include "esp_transport_net_mon.h"
 
 typedef struct {
-
+    uint32_t connect_latency_ms;
+    uint32_t rw_latency_ms;
+    uint32_t poll_rw_latency_ms;
+    transport_net_mon_config_t config;
 } transport_net_mon_instance_t;
 
 static int net_mon_connect(esp_transport_handle_t handle, const char *host, int port, int timeout_ms)
