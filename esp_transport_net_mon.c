@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <esp_transport.h>
+#include <esp_transport_internal.h>
 #include "esp_transport_net_mon.h"
 
 typedef struct {
@@ -11,6 +12,10 @@ typedef struct {
 
 static int net_mon_connect(esp_transport_handle_t handle, const char *host, int port, int timeout_ms)
 {
+    if (handle == NULL) {
+        return -EINVAL;
+    }
+
     return 0;
 }
 
@@ -21,6 +26,7 @@ static int net_mon_write(esp_transport_handle_t handle, const char *buffer, int 
 
 static int net_mon_read(esp_transport_handle_t handle, char *buffer, int len, int timeout_ms)
 {
+    handle->_close
     return 0;
 }
 
