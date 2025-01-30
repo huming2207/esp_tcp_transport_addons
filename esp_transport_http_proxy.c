@@ -274,6 +274,10 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
 
     if (handle->user_agent != NULL) free(handle->user_agent);
     if (handle->proxy_host != NULL) free(handle->proxy_host);
+    if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
+        esp_transport_destroy_foundation_transport(transport->foundation);
+        transport->foundation = NULL;
+    }
 
     free(handle);
 

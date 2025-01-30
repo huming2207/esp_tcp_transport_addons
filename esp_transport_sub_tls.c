@@ -347,13 +347,22 @@ static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     ESP_LOGI(TAG, "Handle %p destroyed!", handle);
     if (handle == NULL) {
-        return ESP_OK; // Might have been freed before??
-    } else {
-        if (handle->tls) {
-            esp_tls_conn_destroy(handle->tls);
-            handle->tls = NULL;
-        }
+        return ESP_ERR_INVALID_ARG; // Might have been freed before??
     }
+
+    esp_transport_close(handle->parent);
+
+    if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
+        esp_transport_destroy_foundation_transport(transport->foundation);
+        transport->foundation = NULL;
+    }
+
+    if (handle->tls) {
+        esp_tls_conn_destroy(handle->tls);
+        handle->tls = NULL;
+    }
+
+    free(handle);
 
     return ESP_OK;
 }
