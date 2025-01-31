@@ -190,6 +190,7 @@ exit:
 
 static int sub_tls_connect(esp_transport_handle_t transport, const char *const host, int port, int timeout_ms)
 {
+    ESP_LOGD(TAG, "SubTLS connecting!");
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL || handle->parent == NULL || handle->parent->_get_socket == NULL) {
         ESP_LOGE(TAG, "Unsupported parent transport");
@@ -222,6 +223,8 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
     handle->tls->write = esp_mbedtls_write;
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed when creating mbedTLS handle: 0x%x", ret);
+        esp_tls_conn_destroy(handle->tls);
+        handle->tls = NULL;
         return ret;
     }
 
@@ -232,6 +235,8 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
     ret = ret ?: esp_tls_set_conn_sockfd(handle->tls, sock_fd);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed when setting up ESP-TLS state: 0x%x", ret);
+        esp_tls_conn_destroy(handle->tls);
+        handle->tls = NULL;
         return -3;
     }
 
@@ -239,6 +244,7 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
     conn_ret = esp_tls_conn_new_sync(host, (int)strlen(host), port, &handle->cfg, handle->tls);
     if (conn_ret != 1) {
         ESP_LOGE(TAG, "TLS setup/handshake failed: %d", conn_ret);
+        esp_transport_close(transport);
         return -4;
     }
 
@@ -247,7 +253,7 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
 
 static int sub_tls_close(esp_transport_handle_t transport)
 {
-    ESP_LOGD(TAG, "TLS closing!");
+    ESP_LOGD(TAG, "SubTLS closing!");
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL) {
         return -1;
@@ -288,9 +294,21 @@ static int sub_tls_write(esp_transport_handle_t transport, const char *buffer, i
 
 static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len, int timeout_ms)
 {
+    ESP_LOGD(TAG, "SubTLS reading!");
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL) {
         return -1;
+    }
+
+    int poll = esp_transport_poll_read(transport, timeout_ms);
+    if (poll == -1) {
+        ESP_LOGE(TAG, "esp_transport_poll_read error, errno=%s", strerror(errno));
+        esp_tls_conn_destroy(handle->tls);
+        handle->tls = NULL;
+        return ERR_TCP_TRANSPORT_CONNECTION_FAILED;
+    }
+    if (poll == 0) {
+        return ERR_TCP_TRANSPORT_CONNECTION_TIMEOUT;
     }
 
     int ret = esp_tls_conn_read(handle->tls, (unsigned char *)buffer, len);
@@ -306,6 +324,10 @@ static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len,
         } else {
             ESP_LOGE(TAG, "Error in obtaining the error handle");
         }
+
+        esp_tls_conn_destroy(handle->tls);
+        handle->tls = NULL;
+
     } else if (ret == 0) {
         if (poll > 0) {
             // no error, socket reads 0 while previously detected as readable -> connection has been closed cleanly
@@ -339,7 +361,7 @@ static int sub_tls_poll_write(esp_transport_handle_t transport, int timeout_ms)
 
 static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
 {
-    ESP_LOGD(TAG, "Destroying!");
+    ESP_LOGD(TAG, "SubTLS Destroying!");
     if (transport == NULL) {
         return ESP_OK;
     }
@@ -350,6 +372,11 @@ static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
         return ESP_ERR_INVALID_ARG; // Might have been freed before??
     }
 
+    if (handle->tls) {
+        esp_tls_conn_destroy(handle->tls);
+        handle->tls = NULL;
+    }
+
     esp_transport_close(handle->parent);
 
     if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
@@ -357,10 +384,6 @@ static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
         transport->foundation = NULL;
     }
 
-    if (handle->tls) {
-        esp_tls_conn_destroy(handle->tls);
-        handle->tls = NULL;
-    }
 
     free(handle);
 
