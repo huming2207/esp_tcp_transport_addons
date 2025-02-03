@@ -300,17 +300,6 @@ static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len,
         return -1;
     }
 
-    int poll = esp_transport_poll_read(transport, timeout_ms);
-    if (poll == -1) {
-        ESP_LOGE(TAG, "esp_transport_poll_read error, errno=%s", strerror(errno));
-        esp_tls_conn_destroy(handle->tls);
-        handle->tls = NULL;
-        return ERR_TCP_TRANSPORT_CONNECTION_FAILED;
-    }
-    if (poll == 0) {
-        return ERR_TCP_TRANSPORT_CONNECTION_TIMEOUT;
-    }
-
     int ret = esp_tls_conn_read(handle->tls, (unsigned char *)buffer, len);
     if (ret < 0) {
         ESP_LOGE(TAG, "esp_tls_conn_read error, errno=%s", strerror(errno));
