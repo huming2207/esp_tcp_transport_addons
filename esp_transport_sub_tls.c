@@ -261,8 +261,14 @@ static int sub_tls_close(esp_transport_handle_t transport)
         return -1;
     }
 
-    int ret = esp_transport_close(handle->parent);
-    if (ret >= 0) {
+    int32_t ret = esp_transport_close(handle->parent);
+    if (ret < 0) {
+        ESP_LOGE(TAG, "Failed to close connection; ret=%ld", ret);
+    }
+
+    if (handle->tls) {
+        mbedtls_ssl_free(&handle->tls->ssl);
+        esp_tls_conn_destroy(handle->tls);
         handle->tls = NULL;
     }
 
@@ -316,6 +322,7 @@ static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len,
             ESP_LOGE(TAG, "Error in obtaining the error handle");
         }
 
+        mbedtls_ssl_free(&handle->tls->ssl);
         esp_tls_conn_destroy(handle->tls);
         handle->tls = NULL;
 
@@ -364,6 +371,7 @@ static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
 
     ESP_LOGW(TAG, "Handle %p, TLS %p gonna be destroyed!", handle, handle->tls);
     if (handle->tls) {
+        mbedtls_ssl_free(&handle->tls->ssl);
         esp_tls_conn_destroy(handle->tls);
         handle->tls = NULL;
     }
