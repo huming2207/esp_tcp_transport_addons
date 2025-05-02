@@ -248,6 +248,8 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
         return -4;
     }
 
+
+    ESP_LOGW(TAG, "Inited with handle %p, %p; TLS %p", handle, transport, handle->tls);
     return 0;
 }
 
@@ -350,17 +352,17 @@ static int sub_tls_poll_write(esp_transport_handle_t transport, int timeout_ms)
 
 static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
 {
-    ESP_LOGD(TAG, "SubTLS Destroying!");
+    ESP_LOGW(TAG, "SubTLS Destroying!");
     if (transport == NULL) {
         return ESP_OK;
     }
 
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
-    ESP_LOGI(TAG, "Handle %p destroyed!", handle);
     if (handle == NULL) {
         return ESP_ERR_INVALID_ARG; // Might have been freed before??
     }
 
+    ESP_LOGW(TAG, "Handle %p, TLS %p gonna be destroyed!", handle, handle->tls);
     if (handle->tls) {
         esp_tls_conn_destroy(handle->tls);
         handle->tls = NULL;
