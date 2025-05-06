@@ -49,7 +49,7 @@ static int http_on_header_field(http_parser *parser, const char *at, size_t leng
     transport_http_proxy_t *handle = parser->data;
     size_t cpy_len = (length > (sizeof(handle->curr_header_key) - 1)) ? (sizeof(handle->curr_header_key) - 1) : length;
     strncpy(handle->curr_header_key, at, cpy_len);
-
+    handle->curr_header_key[sizeof(handle->curr_header_key) - 1] = '\0';
     ESP_LOGD(TAG, "Got header: %s, len %d", handle->curr_header_key, cpy_len);
     return 0; // Unused
 }
@@ -267,7 +267,7 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
 
 
     transport_http_proxy_t *handle = esp_transport_get_context_data(transport);
-    ESP_LOGI(TAG, "Handle %p destroyed!", handle);
+    ESP_LOGI(TAG, "Handle %p gonna be destroyed!", handle);
     if (handle == NULL) {
         return ESP_ERR_INVALID_ARG; // Might have been freed before??
     }
@@ -281,6 +281,7 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
 
     free(handle);
 
+    ESP_LOGI(TAG, "Handle %p destroyed OK!", handle);
     return ESP_OK;
 }
 
