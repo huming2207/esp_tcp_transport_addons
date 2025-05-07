@@ -191,7 +191,6 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_s
 #endif
 
 #ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
-    mbedtls_ssl_conf_min_tls_version(&sub_tls_handle->conf, MBEDTLS_SSL_VERSION_TLS1_3);
     mbedtls_ssl_conf_max_tls_version(&sub_tls_handle->conf, MBEDTLS_SSL_VERSION_TLS1_3);
 #endif
 
@@ -207,7 +206,7 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_s
 
 static int sub_tls_connect(esp_transport_handle_t transport, const char *const host, int port, int timeout_ms)
 {
-    ESP_LOGI(TAG, "SubTLS connecting! handle  %p", transport);
+    ESP_LOGD(TAG, "SubTLS connecting! handle  %p", transport);
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL || handle->parent == NULL) {
         ESP_LOGE(TAG, "Unsupported parent transport");
@@ -279,21 +278,21 @@ static int sub_tls_write(esp_transport_handle_t transport, const char *buffer, i
         return -1;
     }
 
-    ESP_LOGI(TAG, "write: begins");
-    size_t offset = 0;
+    ESP_LOGD(TAG, "write: begins");
+    int offset = 0;
 
     do {
         int ret = mbedtls_ssl_write(&handle->ssl, (const unsigned char *)(buffer + offset), (len - offset));
         if (ret >= 0) {
             offset += ret;
-            ESP_LOGI(TAG, "Tx %d bytes", ret);
+            ESP_LOGD(TAG, "Tx %d bytes", ret);
         } else if (ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret != MBEDTLS_ERR_SSL_WANT_READ) {
             ESP_LOGE(TAG, "mbedtls_ssl_write() error, errno=%d, %s, ret=0x%x", errno, strerror(errno), ret);
             return -1;
         }
     } while (offset < len);
 
-    ESP_LOGI(TAG, "write: ok");
+    ESP_LOGD(TAG, "write: ok");
     return offset;
 }
 
