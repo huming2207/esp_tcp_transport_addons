@@ -207,7 +207,7 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_s
 
 static int sub_tls_connect(esp_transport_handle_t transport, const char *const host, int port, int timeout_ms)
 {
-    ESP_LOGD(TAG, "SubTLS connecting!");
+    ESP_LOGI(TAG, "SubTLS connecting! handle  %p", transport);
     transport_sub_tls_t *handle = esp_transport_get_context_data(transport);
     if (handle == NULL || handle->parent == NULL) {
         ESP_LOGE(TAG, "Unsupported parent transport");
@@ -279,20 +279,22 @@ static int sub_tls_write(esp_transport_handle_t transport, const char *buffer, i
         return -1;
     }
 
+    ESP_LOGI(TAG, "write: begins");
     size_t offset = 0;
 
     do {
         int ret = mbedtls_ssl_write(&handle->ssl, (const unsigned char *)(buffer + offset), (len - offset));
         if (ret >= 0) {
             offset += ret;
-            ESP_LOGD(TAG, "Tx %d bytes", ret);
+            ESP_LOGI(TAG, "Tx %d bytes", ret);
         } else if (ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret != MBEDTLS_ERR_SSL_WANT_READ) {
             ESP_LOGE(TAG, "mbedtls_ssl_write() error, errno=%d, %s, ret=0x%x", errno, strerror(errno), ret);
             return -1;
         }
     } while (offset < len);
 
-    return 0;
+    ESP_LOGI(TAG, "write: ok");
+    return offset;
 }
 
 static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len, int timeout_ms)
@@ -304,10 +306,9 @@ static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len,
     }
 
     int ret = 0;
-    size_t offset = 0;
     mbedtls_ssl_conf_read_timeout(&handle->conf, timeout_ms);
     do {
-        ret = mbedtls_ssl_read(&handle->ssl, (unsigned char *)(buffer + offset), (len - offset));
+        ret = mbedtls_ssl_read(&handle->ssl, (unsigned char *)buffer, len);
 #if CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 && CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS
         if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
             ESP_LOGD(TAG, "got session ticket in TLS 1.3 connection, retry read");
@@ -317,25 +318,21 @@ static int sub_tls_read(esp_transport_handle_t transport, char *buffer, int len,
 
         if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
             continue;
-        }
-
-        if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+        } else if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
             ret = 0;
             break;
-        }
-
-        if (ret < 0) {
+        } else if (ret < 0) {
             ESP_LOGE(TAG, "mbedtls_ssl_read returned 0x%x", ret);
             break;
-        }
-
-        if (ret == 0) {
+        } else if (ret == 0) {
             ESP_LOGW(TAG, "Connection closed??");
             break;
+        } else {
+            return ret;
         }
-    } while (offset < len);
+    } while (true);
 
-    return 0;
+    return ret;
 }
 
 static int sub_tls_poll_read(esp_transport_handle_t transport, int timeout_ms)
