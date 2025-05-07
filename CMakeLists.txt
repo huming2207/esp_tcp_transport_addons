@@ -7,5 +7,5 @@ idf_component_register(
         PRIV_INCLUDE_DIRS
             "${IDF_PATH}/components/esp-tls/private_include" "${IDF_PATH}/components/tcp_transport/private_include"
         REQUIRES
-            tcp_transport mbedtls
+            tcp_transport mbedtls http_parser
 )

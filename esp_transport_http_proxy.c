@@ -49,7 +49,7 @@ static int http_on_header_field(http_parser *parser, const char *at, size_t leng
     transport_http_proxy_t *handle = parser->data;
     size_t cpy_len = (length > (sizeof(handle->curr_header_key) - 1)) ? (sizeof(handle->curr_header_key) - 1) : length;
     strncpy(handle->curr_header_key, at, cpy_len);
-
+    handle->curr_header_key[sizeof(handle->curr_header_key) - 1] = '\0';
     ESP_LOGD(TAG, "Got header: %s, len %d", handle->curr_header_key, cpy_len);
     return 0; // Unused
 }
@@ -267,16 +267,21 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
 
 
     transport_http_proxy_t *handle = esp_transport_get_context_data(transport);
-    ESP_LOGI(TAG, "Handle %p destroyed!", handle);
+    ESP_LOGI(TAG, "Handle %p gonna be destroyed!", handle);
     if (handle == NULL) {
         return ESP_ERR_INVALID_ARG; // Might have been freed before??
     }
 
     if (handle->user_agent != NULL) free(handle->user_agent);
     if (handle->proxy_host != NULL) free(handle->proxy_host);
+    if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
+        esp_transport_destroy_foundation_transport(transport->foundation);
+        transport->foundation = NULL;
+    }
 
     free(handle);
 
+    ESP_LOGI(TAG, "Handle %p destroyed OK!", handle);
     return ESP_OK;
 }
 
@@ -481,6 +486,7 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
     transport->_get_socket = http_proxy_get_sockfd;
     *new_proxy_handle = transport;
 
+    ESP_LOGW(TAG, "Inited with handle %p, %p", proxy_handle, transport);
     return ESP_OK;
 }
 
@@ -490,26 +496,27 @@ esp_err_t esp_transport_create_proxied_plain_tcp(esp_transport_handle_t *new_pro
     return esp_transport_http_proxy_init(new_proxied_handle, config);
 }
 
-esp_err_t esp_transport_create_proxied_tls(esp_transport_handle_t *new_proxied_handle, const esp_transport_http_proxy_config_t *proxy_config, const esp_transport_sub_tls_config_t *tls_config)
+esp_err_t esp_transport_create_proxied_tls(esp_transport_handle_t *new_subtls_pxy_handle, esp_transport_handle_t *new_http_pxy_handle, const esp_transport_http_proxy_config_t *proxy_config, const esp_transport_sub_tls_config_t *tls_config)
 {
-    if (new_proxied_handle == NULL || proxy_config == NULL || tls_config == NULL) {
+    if (new_subtls_pxy_handle == NULL || proxy_config == NULL || tls_config == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_transport_handle_t proxy_handle = NULL;
-    esp_err_t ret = esp_transport_http_proxy_init(&proxy_handle, proxy_config);
+    esp_transport_handle_t http_proxy_handle = NULL;
+    esp_err_t ret = esp_transport_http_proxy_init(&http_proxy_handle, proxy_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Proxy init failed: 0x%x", ret);
         return ret;
     }
 
     esp_transport_handle_t tls_handle = NULL;
-    ret = esp_transport_sub_tls_init(&tls_handle, proxy_handle, tls_config);
+    ret = esp_transport_sub_tls_init(&tls_handle, http_proxy_handle, tls_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "TLS init failed: 0x%x", ret);
         return ret;
     }
 
-    *new_proxied_handle = tls_handle;
+    *new_subtls_pxy_handle = tls_handle;
+    *new_http_pxy_handle = http_proxy_handle;
     return ret;
 }
