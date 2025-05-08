@@ -4,6 +4,7 @@
 #include <esp_transport_tcp.h>
 #include <esp_transport_ssl.h>
 #include <http_parser.h>
+#include <lwip/netdb.h>
 #include "esp_transport_http_proxy.h"
 #include "esp_transport_internal.h"
 #include "esp_transport_sub_tls.h"
@@ -14,6 +15,7 @@ static const size_t MAX_HEADER_LEN = 8192;
 #define HTTP_PROXY_KEEP_ALIVE_IDLE       (5)
 #define HTTP_PROXY_KEEP_ALIVE_INTERVAL   (5)
 #define HTTP_PROXY_KEEP_ALIVE_COUNT      (3)
+#define HTTP_PROXY_CONNECT_FIRST_TIMEOUT (1500UL)
 
 static const char *proxy_alpn_cfgs[2] = { "http/1.1", NULL };
 
@@ -78,18 +80,31 @@ static int http_on_header_value(http_parser *parser, const char *at, size_t leng
 
 static int http_proxy_connect_follow_redirect(transport_http_proxy_t *handle, const char *const host, int port, int timeout_ms)
 {
+    if (host == NULL) {
+        ESP_LOGW(TAG, "follow_redirect: no host provided, skip");
+        return 0;
+    }
+
+    ESP_LOGI(TAG, "follow_redirect: following to %s : %d", host, port);
     char *connect_header = calloc(MAX_HEADER_LEN, sizeof(char));
     if (connect_header == NULL) {
         ESP_LOGE(TAG, "Failed to allocate header buffer");
         return -2;
     }
 
-    ESP_LOGI(TAG, "Connecting to proxy host: %s at port %u", handle->proxy_host, handle->proxy_port);
-    int connect_ret = esp_transport_connect(handle->parent, handle->proxy_host, handle->proxy_port, timeout_ms);
+    // In some cases, the TCP socket connect() will always fail upon the very first connection. Here we do a quick attempt and fail early.
+    // If it fails, then do another one right after.
+    ESP_LOGI(TAG, "Connecting to proxy host: %s at port %u, timeout %lu ms", handle->proxy_host, handle->proxy_port, HTTP_PROXY_CONNECT_FIRST_TIMEOUT);
+    int connect_ret = esp_transport_connect(handle->parent, handle->proxy_host, handle->proxy_port, HTTP_PROXY_CONNECT_FIRST_TIMEOUT);
+
     if (connect_ret < 0) {
-        ESP_LOGE(TAG, "Parent transport method connect fail: %d", connect_ret);
-        free(connect_header);
-        return connect_ret;
+        ESP_LOGI(TAG, "2nd attempt: Connecting to proxy host: %s at port %u, timeout %d ms", handle->proxy_host, handle->proxy_port, timeout_ms);
+        connect_ret = esp_transport_connect(handle->parent, handle->proxy_host, handle->proxy_port, timeout_ms);
+        if (connect_ret < 0) {
+            ESP_LOGE(TAG, "Parent transport method connect fail: %d", connect_ret);
+            free(connect_header);
+            return connect_ret;
+        }
     }
 
     ESP_LOGI(TAG, "Connecting to host via proxy: %s:%d", host, port);
@@ -151,6 +166,7 @@ static int http_proxy_connect_follow_redirect(transport_http_proxy_t *handle, co
 
 static int http_proxy_connect(esp_transport_handle_t transport, const char *const host, int port, int timeout_ms)
 {
+    ESP_LOGD(TAG, "http_proxy_connect: begin");
     if (transport == NULL) {
         ESP_LOGE(TAG, "Transport context is null at connect!");
         return -1;
@@ -356,7 +372,6 @@ static esp_err_t http_proxy_init_standalone(esp_transport_handle_t transport, co
             ESP_LOGE(TAG, "Failed to set TCP port: 0x%x", ret);
             return ret;
         }
-
         esp_transport_tcp_set_keep_alive(proxy_handle->parent, &proxy_handle->keep_alive_cfg);
         esp_transport_tcp_set_interface_name(proxy_handle->parent, config->if_name);
     } else {

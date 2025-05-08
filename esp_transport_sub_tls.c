@@ -211,7 +211,6 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
     if (handle == NULL || handle->parent == NULL) {
         ESP_LOGE(TAG, "Unsupported parent transport");
         ESP_LOGE(TAG, "Handle: %p", handle);
-        if (handle->parent) ESP_LOGE(TAG, "Handle parent: %p, get_socket %p", handle->parent, handle->parent->_get_socket);
         return -1;
     }
 
@@ -222,6 +221,7 @@ static int sub_tls_connect(esp_transport_handle_t transport, const char *const h
     }
 
     // Now we create our custom magic mbedTLS handle
+    ESP_LOGD(TAG, "Start handshake! %p", transport);
     esp_err_t ret = sub_tls_create_mbedtls_handle(host, handle, true);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set up mbedTLS! 0x%x", ret);
@@ -278,7 +278,6 @@ static int sub_tls_write(esp_transport_handle_t transport, const char *buffer, i
         return -1;
     }
 
-    ESP_LOGD(TAG, "write: begins");
     int offset = 0;
 
     do {
@@ -292,7 +291,6 @@ static int sub_tls_write(esp_transport_handle_t transport, const char *buffer, i
         }
     } while (offset < len);
 
-    ESP_LOGD(TAG, "write: ok");
     return offset;
 }
 
