@@ -296,8 +296,6 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
     }
 
     free(handle);
-
-    ESP_LOGI(TAG, "Handle %p destroyed OK!", handle);
     return ESP_OK;
 }
 
