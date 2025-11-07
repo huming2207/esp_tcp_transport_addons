@@ -267,7 +267,7 @@ static int sub_tls_close(esp_transport_handle_t transport)
         ESP_LOGE(TAG, "Failed to close connection; ret=%ld", ret);
     }
 
-    mbedtls_ssl_free(&handle->ssl);
+    mbedtls_ssl_session_reset(&handle->ssl);
     return 0;
 }
 
@@ -372,6 +372,10 @@ static esp_err_t sub_tls_destroy(esp_transport_handle_t transport)
     esp_transport_close(handle->parent);
 
     mbedtls_ssl_free(&handle->ssl);
+    mbedtls_x509_crt_free(&handle->cacert);
+    mbedtls_ctr_drbg_free(&handle->ctr_drbg);
+    mbedtls_ssl_config_free(&handle->conf);
+    mbedtls_entropy_free(&handle->entropy);
 
     if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
         esp_transport_destroy_foundation_transport(transport->foundation);

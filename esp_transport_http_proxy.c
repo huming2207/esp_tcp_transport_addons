@@ -26,6 +26,7 @@ typedef struct transport_http_proxy_t {
     esp_transport_handle_t parent;
     char *proxy_host;
     char *user_agent;
+    bool parent_is_owned;
     esp_transport_keep_alive_t keep_alive_cfg;
     http_parser header_parser;
     http_parser_settings header_parser_cfg;
@@ -290,6 +291,12 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
 
     if (handle->user_agent != NULL) free(handle->user_agent);
     if (handle->proxy_host != NULL) free(handle->proxy_host);
+
+    if (handle->parent_is_owned) {
+        ESP_LOGI(TAG, "Freeing own parent transport %p", handle->parent);
+        esp_transport_destroy(handle->parent);
+    }
+
     if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
         esp_transport_destroy_foundation_transport(transport->foundation);
         transport->foundation = NULL;
@@ -465,13 +472,17 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
     proxy_handle->header_parser_cfg.on_header_value = http_on_header_value;
     proxy_handle->header_parser.data = proxy_handle;
 
+    proxy_handle->parent_is_owned = config->parent_handle == NULL; // True if we create the parent transport
+
     if (config->parent_handle != NULL) {
+        ESP_LOGI(TAG, "Using provided parent transport %p", config->parent_handle);
         esp_err_t ret = http_proxy_init_with_parent(transport, config);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to prepare parent handle: 0x%x", ret);
             return ret;
         }
     } else {
+        ESP_LOGI(TAG, "Creating our own parent transport");
         esp_err_t ret = http_proxy_init_standalone(transport, config);
         if (ret != ESP_OK) {
             return ret;
