@@ -1,7 +1,6 @@
 idf_component_register(
         SRCS
             esp_transport_http_proxy.c esp_transport_http_proxy.h
-            esp_transport_sub_tls.c esp_transport_sub_tls.h
         INCLUDE_DIRS
             .
         PRIV_INCLUDE_DIRS
