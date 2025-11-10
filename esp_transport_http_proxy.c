@@ -21,7 +21,7 @@ static const size_t MAX_HEADER_LEN = 8192;
 static const char *proxy_alpn_cfgs[2] = { "http/1.1", NULL };
 
 typedef struct transport_http_proxy_t {
-    bool use_tls;
+    bool tunnel_use_tls;
     uint16_t proxy_port;
     uint16_t last_http_state;
     uint32_t timeout_ms;
@@ -399,7 +399,7 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
         }
     }
 
-    if (handle->use_tls) {
+    if (handle->tunnel_use_tls) {
         ESP_LOGI(TAG, "TLS enabled for HTTP proxy %p", transport);
         const esp_err_t esp_ret = sub_tls_create_mbedtls_handle(host, handle, handle->tls.tls_cfg.use_global_ca_store);
         if (esp_ret != ESP_OK) {
@@ -446,7 +446,7 @@ static int http_proxy_close(esp_transport_handle_t transport)
         return -1;
     }
 
-    if (handle->use_tls) {
+    if (handle->tunnel_use_tls) {
         ESP_LOGI(TAG, "close: cleaning up TLS");
         mbedtls_ssl_close_notify(&handle->tls.ssl);
         mbedtls_x509_crt_free(&handle->tls.cacert);
@@ -473,7 +473,7 @@ static int http_proxy_write(esp_transport_handle_t transport, const char *buffer
         return -1;
     }
 
-    if (handle->use_tls) {
+    if (handle->tunnel_use_tls) {
         size_t offset = 0;
         do {
             const int ret = mbedtls_ssl_write(&handle->tls.ssl, (const unsigned char *)(buffer + offset), (len - offset));
@@ -505,7 +505,7 @@ static int http_proxy_read(esp_transport_handle_t transport, char *buffer, int l
         return -1;
     }
 
-    if (handle->use_tls) {
+    if (handle->tunnel_use_tls) {
         int ret = 0;
         mbedtls_ssl_conf_read_timeout(&handle->tls.conf, timeout_ms);
         do {
@@ -791,6 +791,7 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
         }
     }
 
+    proxy_handle->tunnel_use_tls = config->tunnel_has_tls;
     memcpy(&proxy_handle->tls.tls_cfg, &config->tunnel_tls, sizeof(esp_transport_http_proxy_tls_config_t));
     proxy_handle->proxy_port = config->proxy_port;
     proxy_handle->proxy_host = strdup(config->proxy_host);
