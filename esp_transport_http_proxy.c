@@ -9,6 +9,7 @@
 #include "esp_transport_internal.h"
 #include <esp_tls_mbedtls.h>
 #include <esp_crt_bundle.h>
+#include <sys/param.h>
 
 static const char *TAG = "trans_http_pxy";
 static const size_t MAX_HEADER_LEN = 8192;
@@ -161,13 +162,13 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
     }
 
     int ret;
-    esp_err_t esp_ret = ESP_FAIL;
+    esp_err_t esp_ret = ESP_OK;
 
 #ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
     const psa_status_t status = psa_crypto_init();
     if (status != PSA_SUCCESS) {
         ESP_LOGE(TAG, "Failed to initialize PSA crypto, returned %d\n", (int) status);
-        return esp_ret;
+        return ESP_FAIL;
     }
 #endif // CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
 
@@ -181,14 +182,16 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
         ret = esp_crt_bundle_attach(&proxy_handle->tls.conf);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to attach crt bundle! 0x%x", ret);
-            return ret;
+            esp_ret = ret;
+            goto mbedtls_err_cleanup;
         }
     }
 
     ret = mbedtls_ssl_set_hostname(&proxy_handle->tls.ssl, hostname);
     if (ret != 0) {
         ESP_LOGE(TAG, "mbedtls_ssl_set_hostname failed: -0x%x", ret);
-        return ESP_FAIL;
+        esp_ret = ESP_FAIL;
+        goto mbedtls_err_cleanup;
     }
 
     if((ret = mbedtls_ssl_config_defaults(&proxy_handle->tls.conf,
@@ -197,7 +200,8 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
                                           MBEDTLS_SSL_PRESET_DEFAULT)) != 0)
     {
         ESP_LOGE(TAG, "mbedtls_ssl_config_defaults returned %d", ret);
-        return ESP_FAIL;
+        esp_ret = ESP_FAIL;
+        goto mbedtls_err_cleanup;
     }
 
     mbedtls_ssl_conf_authmode(&proxy_handle->tls.conf, MBEDTLS_SSL_VERIFY_REQUIRED);
@@ -210,7 +214,8 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
     if ((ret = mbedtls_ctr_drbg_seed(&proxy_handle->tls.ctr_drbg, mbedtls_entropy_func, &proxy_handle->tls.entropy, NULL, 0)) != 0) {
         ESP_LOGE(TAG, "mbedtls_ctr_drbg_seed returned -0x%04X", -ret);
         sub_tls_mbedtls_print_error_msg(ret);
-        return ESP_ERR_MBEDTLS_CTR_DRBG_SEED_FAILED;
+        esp_ret = ESP_ERR_MBEDTLS_CTR_DRBG_SEED_FAILED;
+        goto mbedtls_err_cleanup;
     }
 
     mbedtls_ssl_set_user_data_p(&proxy_handle->tls.ssl, proxy_handle);
@@ -227,11 +232,20 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
     if ((ret = mbedtls_ssl_setup(&proxy_handle->tls.ssl, &proxy_handle->tls.conf)) != 0) {
         ESP_LOGE(TAG, "mbedtls_ssl_setup returned -0x%04X", -ret);
         sub_tls_mbedtls_print_error_msg(ret);
-        return ESP_ERR_MBEDTLS_SSL_SETUP_FAILED;
+        esp_ret = ESP_ERR_MBEDTLS_SSL_SETUP_FAILED;
+        goto mbedtls_err_cleanup;
     }
 
     mbedtls_ssl_set_bio(&proxy_handle->tls.ssl, proxy_handle, mbedtls_over_tcp_trans_send, mbedtls_over_tcp_trans_recv, NULL);
     return ESP_OK;
+
+mbedtls_err_cleanup:
+    mbedtls_x509_crt_free(&proxy_handle->tls.cacert);
+    mbedtls_entropy_free(&proxy_handle->tls.entropy);
+    mbedtls_ssl_config_free(&proxy_handle->tls.conf);
+    mbedtls_ctr_drbg_free(&proxy_handle->tls.ctr_drbg);
+    mbedtls_ssl_free(&proxy_handle->tls.ssl);
+    return esp_ret;
 }
 
 
@@ -257,7 +271,7 @@ static int http_on_header_field(http_parser *parser, const char *at, size_t leng
     transport_http_proxy_t *handle = parser->data;
     const size_t cpy_len = (length > (sizeof(handle->curr_header_key) - 1)) ? (sizeof(handle->curr_header_key) - 1) : length;
     strncpy(handle->curr_header_key, at, cpy_len);
-    handle->curr_header_key[sizeof(handle->curr_header_key) - 1] = '\0';
+    handle->curr_header_key[MIN(sizeof(handle->curr_header_key) - 1, cpy_len)] = '\0';
     ESP_LOGD(TAG, "Got header: %s, len %d", handle->curr_header_key, cpy_len);
     return 0; // Unused
 }
@@ -269,11 +283,17 @@ static int http_on_header_value(http_parser *parser, const char *at, size_t leng
         struct http_parser_url url_parse_state = {};
         http_parser_url_init(&url_parse_state);
         if (http_parser_parse_url(at, length, 0, &url_parse_state) == 0) {
+            char *new_proxy_host = strndup(&at[url_parse_state.field_data[UF_HOST].off], url_parse_state.field_data[UF_HOST].len);
+            if (new_proxy_host == NULL) {
+                ESP_LOGE(TAG, "Failed to allocate memory for new proxy host from redirection");
+                return -1;
+            }
+
             if (handle->proxy_host != NULL) {
                 free(handle->proxy_host);
             }
 
-            handle->proxy_host = strndup(&at[url_parse_state.field_data[UF_HOST].off], url_parse_state.field_data[UF_HOST].len);
+            handle->proxy_host = new_proxy_host;
             handle->proxy_port = get_port(at, &url_parse_state);
         } else {
             ESP_LOGW(TAG, "Location header found but failed to parse URL:");
@@ -781,12 +801,14 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
         esp_err_t ret = http_proxy_init_with_parent(transport, config);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to prepare parent handle: 0x%x", ret);
+            esp_transport_destroy(transport);
             return ret;
         }
     } else {
         ESP_LOGI(TAG, "Creating our own parent transport");
         esp_err_t ret = http_proxy_init_standalone(transport, config);
         if (ret != ESP_OK) {
+            esp_transport_destroy(transport);
             return ret;
         }
     }
