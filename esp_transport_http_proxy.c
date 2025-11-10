@@ -619,12 +619,12 @@ static esp_err_t http_proxy_destroy(esp_transport_handle_t transport)
 
     if (handle->parent_is_owned) {
         ESP_LOGI(TAG, "Freeing own parent transport %p", handle->parent);
-        esp_transport_destroy(handle->parent);
-    }
-
-    if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
-        esp_transport_destroy_foundation_transport(transport->foundation);
-        transport->foundation = NULL;
+        esp_transport_destroy(handle->parent); // Also frees the foundation
+    } else {
+        if (transport->foundation != NULL && handle->parent->foundation != transport->foundation) {
+            esp_transport_destroy_foundation_transport(transport->foundation);
+            transport->foundation = NULL;
+        }
     }
 
     free(handle);
