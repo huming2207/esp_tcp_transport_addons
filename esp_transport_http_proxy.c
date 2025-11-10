@@ -179,6 +179,7 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
     mbedtls_entropy_init(&proxy_handle->tls.entropy);
 
     if (use_esp_crt_bundle) {
+        ESP_LOGD(TAG, "Setting up cert bundle");
         ret = esp_crt_bundle_attach(&proxy_handle->tls.conf);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to attach crt bundle! 0x%x", ret);
@@ -187,6 +188,7 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
         }
     }
 
+    ESP_LOGI(TAG, "Setting hostname %s", hostname);
     ret = mbedtls_ssl_set_hostname(&proxy_handle->tls.ssl, hostname);
     if (ret != 0) {
         ESP_LOGE(TAG, "mbedtls_ssl_set_hostname failed: -0x%x", ret);
@@ -419,6 +421,7 @@ static int http_proxy_connect(esp_transport_handle_t transport, const char *cons
         }
     }
 
+    ESP_LOGI(TAG, "HTTP server returned %u", handle->last_http_state);
     if (handle->tunnel_use_tls) {
         ESP_LOGI(TAG, "TLS enabled for HTTP proxy %p", transport);
         const esp_err_t esp_ret = sub_tls_create_mbedtls_handle(host, handle, handle->tls.tls_cfg.use_global_ca_store);
@@ -501,7 +504,7 @@ static int http_proxy_write(esp_transport_handle_t transport, const char *buffer
                 offset += ret;
                 ESP_LOGD(TAG, "Tx %d bytes", ret);
             } else if (ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret != MBEDTLS_ERR_SSL_WANT_READ) {
-                ESP_LOGE(TAG, "mbedtls_ssl_write() error, errno=%d, %s, ret=0x%x", errno, strerror(errno), ret);
+                ESP_LOGE(TAG, "mbedtls_ssl_write() error, errno=%d, %s, ret=0x%x %d", errno, strerror(errno), ret, ret);
                 return -1;
             }
         } while (offset < len);
@@ -813,6 +816,7 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
         }
     }
 
+    proxy_handle->timeout_ms = config->timeout_ms == 0 ? 10000 : config->timeout_ms; // Default 10 seconds if timeout is 0
     proxy_handle->tunnel_use_tls = config->tunnel_has_tls;
     memcpy(&proxy_handle->tls.tls_cfg, &config->tunnel_tls, sizeof(esp_transport_http_proxy_tls_config_t));
     proxy_handle->proxy_port = config->proxy_port;

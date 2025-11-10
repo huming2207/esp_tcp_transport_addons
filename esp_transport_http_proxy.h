@@ -25,6 +25,7 @@ typedef struct esp_transport_http_proxy_config_t {
     bool is_https_proxy; // True if you want an HTTPS proxy
     bool tunnel_has_tls; // True if you want to create a TLS tunnel, false to create a plain TCP tunnel
     bool disable_keep_alive;
+    int timeout_ms;
     uint16_t proxy_port;
     const char *proxy_host;
     const char *user_agent;
