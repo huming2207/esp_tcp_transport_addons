@@ -10,6 +10,9 @@
 #include <esp_tls_mbedtls.h>
 #include <esp_crt_bundle.h>
 #include <sys/param.h>
+#include <psa/crypto.h>
+#include <mbedtls/version.h>    // Fallback for older Mbed TLS versions
+#include <mbedtls/build_info.h> // Mbed TLS 3.x/4.x version macros
 
 static const char *TAG = "trans_http_pxy";
 static const size_t MAX_HEADER_LEN = 8192;
@@ -37,10 +40,13 @@ typedef struct transport_http_proxy_t {
     char curr_header_key[32];
     struct {
         mbedtls_ssl_context ssl;                                                    /*!< TLS/SSL context */
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_entropy_context entropy;                                            /*!< mbedTLS entropy context structure */
         mbedtls_ctr_drbg_context ctr_drbg;                                          /*!< mbedTLS ctr drbg context structure.
                                                                                          CTR_DRBG is deterministic random
                                                                                          bit generation based on AES-256 */
+#endif
+
         mbedtls_ssl_config conf;                                                    /*!< TLS/SSL configuration to be shared
                                                                                          between mbedtls_ssl_context
                                                                                          structures */
@@ -164,19 +170,26 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
     int ret;
     esp_err_t esp_ret = ESP_OK;
 
-#ifdef CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
+    // PSA Crypto is mandatory in Mbed TLS v4, or if TLS 1.3 is enabled in older versions
+#if MBEDTLS_VERSION_MAJOR >= 4 || defined(CONFIG_MBEDTLS_SSL_PROTO_TLS1_3)
     const psa_status_t status = psa_crypto_init();
     if (status != PSA_SUCCESS) {
-        ESP_LOGE(TAG, "Failed to initialize PSA crypto, returned %d\n", (int) status);
+        ESP_LOGE(TAG, "sub_tls: Failed to initialize PSA crypto, returned %d\n", (int) status);
         return ESP_FAIL;
     }
-#endif // CONFIG_MBEDTLS_SSL_PROTO_TLS1_3
+#endif
 
     mbedtls_ssl_init(&proxy_handle->tls.ssl);
     mbedtls_x509_crt_init(&proxy_handle->tls.cacert);
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_init(&proxy_handle->tls.ctr_drbg);
+#endif
     mbedtls_ssl_config_init(&proxy_handle->tls.conf);
+
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_entropy_init(&proxy_handle->tls.entropy);
+#endif
+
 
     if (use_esp_crt_bundle) {
         ESP_LOGD(TAG, "Setting up cert bundle");
@@ -208,20 +221,30 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
 
     mbedtls_ssl_conf_authmode(&proxy_handle->tls.conf, MBEDTLS_SSL_VERIFY_REQUIRED);
     mbedtls_ssl_conf_ca_chain(&proxy_handle->tls.conf, &proxy_handle->tls.cacert, NULL);
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ssl_conf_rng(&proxy_handle->tls.conf, mbedtls_ctr_drbg_random, &proxy_handle->tls.ctr_drbg);
+#endif
+
 #ifdef CONFIG_MBEDTLS_DEBUG
     mbedtls_esp_enable_debug_log(&proxy_handle->tls.conf, CONFIG_MBEDTLS_DEBUG_LEVEL);
 #endif
 
+#if MBEDTLS_VERSION_MAJOR < 4
     if ((ret = mbedtls_ctr_drbg_seed(&proxy_handle->tls.ctr_drbg, mbedtls_entropy_func, &proxy_handle->tls.entropy, NULL, 0)) != 0) {
         ESP_LOGE(TAG, "mbedtls_ctr_drbg_seed returned -0x%04X", -ret);
         sub_tls_mbedtls_print_error_msg(ret);
         esp_ret = ESP_ERR_MBEDTLS_CTR_DRBG_SEED_FAILED;
         goto mbedtls_err_cleanup;
     }
+#endif
+
 
     mbedtls_ssl_set_user_data_p(&proxy_handle->tls.ssl, proxy_handle);
+
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ssl_conf_rng(&proxy_handle->tls.conf, mbedtls_ctr_drbg_random, &proxy_handle->tls.ctr_drbg);
+#endif
+
 
 #ifdef CONFIG_MBEDTLS_DEBUG
     mbedtls_esp_enable_debug_log(&proxy_handle->tls.conf, CONFIG_MBEDTLS_DEBUG_LEVEL);
@@ -243,9 +266,17 @@ static esp_err_t sub_tls_create_mbedtls_handle(const char *hostname, transport_h
 
 mbedtls_err_cleanup:
     mbedtls_x509_crt_free(&proxy_handle->tls.cacert);
+
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_entropy_free(&proxy_handle->tls.entropy);
+#endif
+
     mbedtls_ssl_config_free(&proxy_handle->tls.conf);
+
+#if MBEDTLS_VERSION_MAJOR < 4
     mbedtls_ctr_drbg_free(&proxy_handle->tls.ctr_drbg);
+#endif
+
     mbedtls_ssl_free(&proxy_handle->tls.ssl);
     return esp_ret;
 }
@@ -473,9 +504,17 @@ static int http_proxy_close(esp_transport_handle_t transport)
         ESP_LOGI(TAG, "close: cleaning up TLS");
         mbedtls_ssl_close_notify(&handle->tls.ssl);
         mbedtls_x509_crt_free(&handle->tls.cacert);
+
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_entropy_free(&handle->tls.entropy);
+#endif
+
         mbedtls_ssl_config_free(&handle->tls.conf);
+
+#if MBEDTLS_VERSION_MAJOR < 4
         mbedtls_ctr_drbg_free(&handle->tls.ctr_drbg);
+#endif
+
         mbedtls_ssl_free(&handle->tls.ssl);
         ESP_LOGI(TAG, "close: TLS cleared");
     }
