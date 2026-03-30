@@ -25,6 +25,7 @@ static const size_t MAX_HEADER_LEN = 8192;
 static const char *proxy_alpn_cfgs[2] = { "http/1.1", NULL };
 
 typedef struct transport_http_proxy_t {
+    bool closed;
     bool tunnel_use_tls;
     uint16_t proxy_port;
     uint16_t last_http_state;
@@ -500,8 +501,13 @@ static int http_proxy_close(esp_transport_handle_t transport)
         return -1;
     }
 
+    if (handle->closed) {
+        ESP_LOGW(TAG, "Already closed, %p", transport);
+        return 0;
+    }
+
     if (handle->tunnel_use_tls) {
-        ESP_LOGI(TAG, "close: cleaning up TLS");
+        ESP_LOGI(TAG, "close: cleaning up TLS: %p", handle);
         mbedtls_ssl_close_notify(&handle->tls.ssl);
         mbedtls_x509_crt_free(&handle->tls.cacert);
 
@@ -516,10 +522,20 @@ static int http_proxy_close(esp_transport_handle_t transport)
 #endif
 
         mbedtls_ssl_free(&handle->tls.ssl);
+        handle->tunnel_use_tls = false; // Mark as cleared
         ESP_LOGI(TAG, "close: TLS cleared");
     }
 
-    return esp_transport_close(handle->parent);
+    int close_ret = 0;
+    if (handle->parent) {
+        close_ret = esp_transport_close(handle->parent);
+    }
+
+    if (close_ret == 0) {
+        handle->closed = true;
+    }
+
+    return close_ret;
 }
 
 static int http_proxy_write(esp_transport_handle_t transport, const char *buffer, int len, int timeout_ms)
@@ -879,6 +895,7 @@ esp_err_t esp_transport_http_proxy_init(esp_transport_handle_t *new_proxy_handle
     transport->_get_socket = http_proxy_get_sockfd;
     *new_proxy_handle = transport;
 
+    proxy_handle->closed = false;
     ESP_LOGW(TAG, "Inited with handle %p, %p", proxy_handle, transport);
     return ESP_OK;
 }
